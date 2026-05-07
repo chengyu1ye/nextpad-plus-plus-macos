@@ -197,6 +197,25 @@
     [self addNewTab];
 }
 
+- (void)tabBar:(NppTabBar *)bar didMoveTabFromIndex:(NSInteger)fromIndex toIndex:(NSInteger)toIndex {
+    NSInteger count = (NSInteger)_editors.count;
+    if (fromIndex < 0 || fromIndex >= count ||
+        toIndex < 0 || toIndex >= count ||
+        fromIndex == toIndex) return;
+
+    EditorView *movingEditor = _editors[fromIndex];
+    [_editors removeObjectAtIndex:(NSUInteger)fromIndex];
+    [_editors insertObject:movingEditor atIndex:(NSUInteger)toIndex];
+
+    if (_selectedIndex == fromIndex) {
+        _selectedIndex = toIndex;
+    } else if (fromIndex < _selectedIndex && _selectedIndex <= toIndex) {
+        _selectedIndex--;
+    } else if (toIndex <= _selectedIndex && _selectedIndex < fromIndex) {
+        _selectedIndex++;
+    }
+}
+
 #pragma mark - Accessors
 
 - (NppTabBar *)tabBar    { return _tabBar; }
