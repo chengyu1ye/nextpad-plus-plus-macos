@@ -17,6 +17,7 @@ NSString *const kPrefEOLType            = @"eolType";       // 0=CRLF 1=LF 2=CR
 NSString *const kPrefEncoding           = @"encoding";      // 0=UTF-8 1=Latin-1
 NSString *const kPrefAutoBackup         = @"autoBackup";
 NSString *const kPrefBackupInterval     = @"backupInterval"; // seconds
+NSString *const kPrefRememberSession    = @"rememberSession"; // BOOL, default YES — issue #87
 NSString *const kPrefZoomLevel          = @"zoomLevel";
 NSString *const kPrefSpellCheck         = @"spellCheck";
 NSString *const kPrefAutoCompleteEnable  = @"autoCompleteEnable";
@@ -116,6 +117,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         kPrefEncoding:           @0,
         kPrefAutoBackup:         @YES,
         kPrefBackupInterval:     @60,
+        kPrefRememberSession:    @YES,
         kPrefZoomLevel:          @0,
         kPrefLanguage:           @"english",
         // Default (light) theme colors
@@ -137,7 +139,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         kPrefTabMaxLabelWidth:     @190,
         kPrefTabCloseButton:       @YES,
         kPrefDoubleClickTabClose:  @NO,
-        kPrefTabBarWrap:           @YES,
+        kPrefTabBarWrap:           @NO,
         kPrefVirtualSpace:         @NO,
         kPrefScrollBeyondLastLine: @NO,
         kPrefCaretBlinkRate:       @500,
@@ -258,6 +260,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         kPrefEncoding:           @0,
         kPrefAutoBackup:         @YES,
         kPrefBackupInterval:     @60,
+        kPrefRememberSession:    @YES,
     }];
 }
 
@@ -1275,6 +1278,17 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
     [v addSubview:autoBackup];
     y -= 30;
 
+    // Issue #87 — when off, app starts with a clean editor on each launch.
+    // Independent from auto-backup above (auto-backup keeps protecting unsaved
+    // work in case of crash; remember-session is purely about reopening tabs).
+    NSButton *rememberSession = [NSButton checkboxWithTitle:[[NppLocalizer shared] translate:@"Remember current session for next launch"]
+                                                     target:self action:@selector(prefChanged:)];
+    rememberSession.frame = NSMakeRect(20, y, 400, 20);
+    rememberSession.state = [ud boolForKey:kPrefRememberSession] ? NSControlStateValueOn : NSControlStateValueOff;
+    rememberSession.tag = 302;
+    [v addSubview:rememberSession];
+    y -= 30;
+
     NSTextField *intLabel = [NSTextField labelWithString:[[NppLocalizer shared] translate:@"Backup interval (seconds):"]];
     intLabel.frame = NSMakeRect(20, y, 200, 20);
     [v addSubview:intLabel];
@@ -1485,6 +1499,7 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         case 201: [ud setInteger:[(NSPopUpButton *)sender indexOfSelectedItem] forKey:kPrefEncoding]; break;
         case 300: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefAutoBackup]; break;
         case 301: [ud setInteger:[(NSTextField *)sender integerValue] forKey:kPrefBackupInterval]; break;
+        case 302: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefRememberSession]; break;
         case 400: {
             NSPopUpButton *popup = (NSPopUpButton *)sender;
             NSString *selectedName = popup.selectedItem.title;

@@ -987,6 +987,49 @@ static NSCursor *cursorFromEnum(Window::Cursor cursor) {
 	mOwner.backend->DeleteBackward();
 }
 
+// macOS-standard text-edit shortcuts. These are dispatched by AppKit's
+// interpretKeyEvents: from the corresponding key+modifier combinations
+// (Option+Backspace, Option+Delete, Cmd+Backspace, Ctrl+K). Without
+// them the events would either fire Scintilla's Windows-style command
+// or be silently dropped because no responder implements them.
+//
+// Behaviour matches NSTextView: when a selection exists, every "delete
+// X" shortcut just deletes the selection (not the word/line). Scintilla's
+// SCI_DEL{WORD,LINE}{LEFT,RIGHT} ignore the anchor and act from the
+// caret outward, so we route through SCI_CLEAR (selection-aware) when a
+// selection is present.
+- (void) deleteWordBackward: (id) sender {
+#pragma unused(sender)
+	if (mOwner.backend->HasSelection())
+		mOwner.backend->WndProc(Message::Clear, 0, 0);
+	else
+		mOwner.backend->WndProc(Message::DelWordLeft, 0, 0);
+}
+
+- (void) deleteWordForward: (id) sender {
+#pragma unused(sender)
+	if (mOwner.backend->HasSelection())
+		mOwner.backend->WndProc(Message::Clear, 0, 0);
+	else
+		mOwner.backend->WndProc(Message::DelWordRight, 0, 0);
+}
+
+- (void) deleteToBeginningOfLine: (id) sender {
+#pragma unused(sender)
+	if (mOwner.backend->HasSelection())
+		mOwner.backend->WndProc(Message::Clear, 0, 0);
+	else
+		mOwner.backend->WndProc(Message::DelLineLeft, 0, 0);
+}
+
+- (void) deleteToEndOfLine: (id) sender {
+#pragma unused(sender)
+	if (mOwner.backend->HasSelection())
+		mOwner.backend->WndProc(Message::Clear, 0, 0);
+	else
+		mOwner.backend->WndProc(Message::DelLineRight, 0, 0);
+}
+
 - (void) cut: (id) sender {
 #pragma unused(sender)
 	mOwner.backend->Cut();

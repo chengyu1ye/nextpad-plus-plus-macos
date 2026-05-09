@@ -1,4 +1,6 @@
 #import "MainWindowController.h"
+#import "AppDelegate.h"
+#import "NppCommandLineParams.h"
 #import "TabManager.h"
 #import "EditorView.h"
 #import "FindReplacePanel.h"
@@ -1645,6 +1647,16 @@ static NSDictionary<NSString *, NSArray *> *toolbarGroupMap(void) {
     tb.delegate = self;
     tb.allowsUserCustomization = NO;
     tb.displayMode = NSToolbarDisplayModeIconOnly;
+    // Issue #26: each NSToolbarItem in our setup wraps a multi-button custom
+    // view, not a single labelled button — so there's no per-item label to
+    // render in "Icon and Text" mode. Hide the display-mode picker from the
+    // toolbar's right-click context menu so users can't pick a mode that
+    // would only render empty space below the icons. See
+    // docs/issue-26-toolbar-icon-and-text.md for the full analysis. Will be
+    // re-enabled when toolbar is refactored to one NSToolbarItem per button.
+    if (@available(macOS 13.0, *)) {
+        tb.allowsDisplayModeCustomization = NO;
+    }
     self.window.toolbar = tb;
     // Expanded style puts the toolbar in its own row below the title bar,
     // so items are always left-aligned (not scattered around a centered title).
@@ -2378,7 +2390,7 @@ static BOOL groupHasTrailingSep(NSString *ident) {
 
 - (void)_tabControlNew:(id)sender {
     [_activeTabManager addNewTab];
-    [self.window makeFirstResponder:[_activeTabManager currentEditor].scintillaView];
+    [self.window makeFirstResponder:[_activeTabManager currentEditor].scintillaView.content];
 }
 
 - (void)_tabControlList:(id)sender {
@@ -2430,7 +2442,7 @@ static BOOL groupHasTrailingSep(NSString *ident) {
     if (idx != NSNotFound) {
         _activeTabManager = tm;
         [tm selectTabAtIndex:idx];
-        [self.window makeFirstResponder:ed.scintillaView];
+        [self.window makeFirstResponder:ed.scintillaView.content];
     }
 }
 
@@ -2810,6 +2822,15 @@ static BOOL groupHasTrailingSep(NSString *ident) {
         [tabs addObject:info];
     }
 
+    // Issue #87 — don't overwrite session.plist with an empty session.
+    // The loop above skips unmodified untitled tabs, so a window that only
+    // holds the default empty buffer produces tabs.count == 0. Writing that
+    // would destructively erase any previously-saved session — which manifests
+    // when the user toggles "Remember session" OFF, quits (save skipped, file
+    // preserved), relaunches (1 default tab), toggles back ON, then quits:
+    // without this guard the toggle-on quit would wipe the preserved session.
+    if (tabs.count == 0) return;
+
     NSDictionary *session = @{
         @"tabs":          tabs,
         @"selectedIndex": @(_tabManager.tabBar.selectedIndex)
@@ -2868,26 +2889,7 @@ static BOOL groupHasTrailingSep(NSString *ident) {
         if (lang.length) [ed setLanguage:lang];
         [_tabManager refreshCurrentTabTitle];
 
-        // ── Restore cursor, selection, scroll state ──
         ScintillaView *sci = ed.scintillaView;
-        NSNumber *startPos = info[@"startPos"];
-        NSNumber *endPos   = info[@"endPos"];
-        if (startPos && endPos) {
-            NSInteger selMode = [info[@"selMode"] integerValue];
-            if (selMode > 0)
-                [sci message:SCI_SETSELECTIONMODE wParam:(uptr_t)selMode];
-            [sci message:SCI_SETANCHOR     wParam:0 lParam:startPos.longLongValue];
-            [sci message:SCI_SETCURRENTPOS wParam:0 lParam:endPos.longLongValue];
-        }
-        NSNumber *scrollWidth = info[@"scrollWidth"];
-        if (scrollWidth && scrollWidth.longLongValue > 1)
-            [sci message:SCI_SETSCROLLWIDTH wParam:(uptr_t)scrollWidth.longLongValue];
-        NSNumber *xOffset = info[@"xOffset"];
-        if (xOffset)
-            [sci message:SCI_SETXOFFSET wParam:(uptr_t)xOffset.longLongValue];
-        NSNumber *firstVisLine = info[@"firstVisibleLine"];
-        if (firstVisLine)
-            [sci message:SCI_SETFIRSTVISIBLELINE wParam:(uptr_t)firstVisLine.longLongValue];
 
         // ── Restore encoding ──
         // (encoding is set during loadFileAtPath: based on BOM detection;
@@ -2912,7 +2914,9 @@ static BOOL groupHasTrailingSep(NSString *ident) {
         for (NSNumber *bkLine in bookmarks)
             [sci message:SCI_MARKERADD wParam:(uptr_t)bkLine.longLongValue lParam:20]; // kBookmarkMarker=20
 
-        // ── Restore fold state ──
+        // ── Restore fold state (BEFORE caret so a saved caret on a header
+        // line lands consistently with the display, and any later
+        // ENSUREVISIBLE call has the right fold context to expand). ──
         NSArray *folds = info[@"folds"];
         if (folds.count) {
             // Ensure fold levels are computed before applying fold state
@@ -2925,6 +2929,41 @@ static BOOL groupHasTrailingSep(NSString *ident) {
                     [sci message:SCI_TOGGLEFOLD wParam:(uptr_t)line];
             }
         }
+
+        // ── Restore cursor & selection ──
+        // SCI_SETSEL takes wParam=anchor, lParam=caret, atomically. Earlier
+        // code mistakenly used SCI_SETANCHOR/SCI_SETCURRENTPOS with the
+        // position in lParam (those take wParam=pos), so the saved offset
+        // never actually applied — every relaunch parked the caret at 0.
+        // Clamp against current document length in case the file shrank
+        // since the session was saved.
+        NSNumber *startPos = info[@"startPos"];
+        NSNumber *endPos   = info[@"endPos"];
+        if (startPos && endPos) {
+            sptr_t docLen = [sci message:SCI_GETLENGTH];
+            sptr_t anchor = MAX((sptr_t)0, MIN((sptr_t)startPos.longLongValue, docLen));
+            sptr_t caret  = MAX((sptr_t)0, MIN((sptr_t)endPos.longLongValue,   docLen));
+            NSInteger selMode = [info[@"selMode"] integerValue];
+            if (selMode > 0)
+                [sci message:SCI_SETSELECTIONMODE wParam:(uptr_t)selMode];
+            [sci message:SCI_SETSEL wParam:(uptr_t)anchor lParam:(sptr_t)caret];
+            // If the caret line sits inside a still-collapsed fold,
+            // expand the enclosing folds so the caret is reachable.
+            sptr_t caretLine = [sci message:SCI_LINEFROMPOSITION wParam:(uptr_t)caret];
+            [sci message:SCI_ENSUREVISIBLEENFORCEPOLICY wParam:(uptr_t)caretLine];
+        }
+
+        // ── Restore scroll position (last, so saved firstVisibleLine wins
+        // over the implicit scroll caused by ENSUREVISIBLE above). ──
+        NSNumber *scrollWidth = info[@"scrollWidth"];
+        if (scrollWidth && scrollWidth.longLongValue > 1)
+            [sci message:SCI_SETSCROLLWIDTH wParam:(uptr_t)scrollWidth.longLongValue];
+        NSNumber *xOffset = info[@"xOffset"];
+        if (xOffset)
+            [sci message:SCI_SETXOFFSET wParam:(uptr_t)xOffset.longLongValue];
+        NSNumber *firstVisLine = info[@"firstVisibleLine"];
+        if (firstVisLine)
+            [sci message:SCI_SETFIRSTVISIBLELINE wParam:(uptr_t)firstVisLine.longLongValue];
 
         opened++;
     }
@@ -4822,7 +4861,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     } completionHandler:^{
         self->_incSearchBar.hidden = YES;
     }];
-    [self.window makeFirstResponder:ed.scintillaView];
+    [self.window makeFirstResponder:ed.scintillaView.content];
 }
 
 // ── Change History ────────────────────────────────────────────────────────────
@@ -5247,7 +5286,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     for (int i = 0; i < 3; i++) {
         TabManager *tm = candidates[i];
         if (tm != _activeTabManager && tm.allEditors.count > 0) {
-            [self.window makeFirstResponder:tm.currentEditor.scintillaView];
+            [self.window makeFirstResponder:tm.currentEditor.scintillaView.content];
             _activeTabManager = tm;
             return;
         }
@@ -6153,7 +6192,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
         ctx.duration = 0.12;
         self->_findPanelHeightConstraint.animator.constant = 0;
     } completionHandler:^{ self->_findPanel.hidden = YES; }];
-    [self.window makeFirstResponder:[self currentEditor].scintillaView];
+    [self.window makeFirstResponder:[self currentEditor].scintillaView.content];
 }
 
 #pragma mark - NSSplitViewDelegate
@@ -6315,8 +6354,11 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
 - (void)tabManager:(id)tabManager didSelectEditor:(EditorView *)editor {
     _activeTabManager = tabManager;
     // Give the editor keyboard focus so the old pane's caret stops blinking
-    // and SCN_FOCUSIN fires on the correct editor.
-    [self.window makeFirstResponder:editor.scintillaView];
+    // and SCN_FOCUSIN fires on the correct editor. Target the SCIContentView
+    // (`.content`), not the outer ScintillaView NSView wrapper — only the
+    // content view is in Scintilla's keyDown: chain, so making the wrapper
+    // first responder leaves typing dead until the user clicks in the editor.
+    [self.window makeFirstResponder:editor.scintillaView.content];
 
     // Notify plugins that a different buffer is now active
     [[NppPluginManager shared] notifyPluginsWithCode:NPPN_BUFFERACTIVATED
@@ -7848,7 +7890,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     tv.font = [NSFont fontWithName:@"Menlo" size:11];
     tv.string =
         @"Usage:\n\n"
-        @"notepad++ [--help] [-multiInst] [-noPlugin] [-lLanguage] [-udl=\"My UDL Name\"]\n"
+        @"nextpad++ [--help] [-multiInst] [-noPlugin] [-lLanguage] [-udl=\"My UDL Name\"]\n"
         @"[-LlangCode] [-nLineNumber] [-cColumnNumber] [-pPosition] [-xLeftPos] [-yTopPos]\n"
         @"[-monitor] [-nosession] [-notabbar] [-loadingTime] [-alwaysOnTop]\n"
         @"[-ro] [-fullReadOnly] [-fullReadOnlySavingForbidden] [-openSession] [-r]\n"
@@ -7889,8 +7931,16 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
         @"-openFoldersAsWorkspace: Open filePath of folder(s) as workspace\n"
         @"-titleAdd=\"string\": Add string to Notepad++ title bar\n"
         @"filePath: File or folder name to open (absolute or relative path name)\n\n"
-        @"Note: On macOS, most CLI arguments are not yet implemented.\n"
-        @"Currently supported: filePath (open files via command line or Finder).";
+        @"Note (macOS): most flags above work as documented. Not yet "
+        @"implemented: -L, -settingsDir, and the Ghost-typing flags "
+        @"(-qn / -qt / -qf / -qSpeed). The -fullReadOnly and "
+        @"-fullReadOnlySavingForbidden flags currently behave like -ro.\n\n"
+        @"To use the 'nextpad++' command shown above, run "
+        @"App menu > 'Install nextpad++ Command Line Tool…'. Without "
+        @"the symlink you can still pass arguments via:\n"
+        @"  open -a Notepad++ --args -n42 file.txt\n"
+        @"or invoke the binary directly:\n"
+        @"  /Applications/Notepad++.app/Contents/MacOS/Notepad++ file.txt";
 
     scroll.documentView = tv;
     [panel.contentView addSubview:scroll];
@@ -7905,6 +7955,269 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
 
     [NSApp runModalForWindow:panel];
     [panel orderOut:nil];
+}
+
+// ── Install command line tool ─────────────────────────────────────────────────
+// Quote a path for safe inclusion in a shell command run by AppleScript.
+// AppleScript already wraps the script in double-quotes so the inner shell
+// sees it as a normal POSIX command. We single-quote and escape any embedded
+// single quotes (`'` → `'\''`) to handle paths with arbitrary characters
+// including spaces, $, &, etc.
+static NSString *_shellQuote(NSString *path) {
+    NSString *escaped = [path stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"];
+    return [NSString stringWithFormat:@"'%@'", escaped];
+}
+
+// Build the bash wrapper script that gets installed as `nextpad++`. Routes
+// through `open -a` (LaunchServices) so the existing app instance is reused
+// and the terminal returns immediately — direct exec of the Mach-O binary
+// would attach NSLog to the user's terminal and leave it stuck. Relative
+// file paths are converted to absolute against the *terminal's* PWD before
+// being passed to `open --args`, since `open` runs the launched app from
+// `/` which would otherwise resolve `./file.txt` against the wrong cwd.
+static NSString *_makeCLIScriptForApp(NSString *appPath) {
+    return [NSString stringWithFormat:
+        @"#!/bin/bash\n"
+         "# nextpad++ — CLI wrapper for Notepad++ macOS\n"
+         "# Auto-generated by Notepad++.app — re-run the\n"
+         "# 'Install nextpad++ Command Line Tool…' menu item to update.\n"
+         "APP=%@\n"
+         "\n"
+         "# Convert relative file paths to absolute. `open --args` runs the\n"
+         "# app from / so unqualified paths would otherwise resolve wrong.\n"
+         "args=()\n"
+         "for arg in \"$@\"; do\n"
+         "    case \"$arg\" in\n"
+         "        -*) args+=(\"$arg\") ;;\n"
+         "        /*) args+=(\"$arg\") ;;\n"
+         "        *)  args+=(\"$PWD/$arg\") ;;\n"
+         "    esac\n"
+         "done\n"
+         "\n"
+         "if [ ${#args[@]} -eq 0 ]; then\n"
+         "    open -a \"$APP\"\n"
+         "else\n"
+         "    open -a \"$APP\" --args \"${args[@]}\"\n"
+         "fi\n",
+        _shellQuote(appPath)];
+}
+
+// Write `script` to `path` and chmod 0755. Removes any existing file/symlink
+// first so this works as both an upgrade (over the old direct-binary symlink)
+// and a fresh install.
+static BOOL _writeCLIScript(NSString *script, NSString *path, NSError **outErr) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:path error:nil];
+    if (![script writeToFile:path
+                  atomically:YES
+                    encoding:NSUTF8StringEncoding
+                       error:outErr])
+        return NO;
+    return [fm setAttributes:@{NSFilePosixPermissions: @0755}
+                ofItemAtPath:path
+                       error:outErr];
+}
+
+// Creates /usr/local/bin/nextpad++ as a wrapper script that dispatches to the
+// running app via `open -a`. Earlier versions installed a direct symlink to
+// the Mach-O binary, which inherited the terminal's stdio (NSLog flooded the
+// terminal, prompt didn't return, didn't reuse the running app instance).
+// /usr/local/bin is on macOS's default PATH; falls back to ~/.local/bin if
+// the user declines admin auth.
+- (void)installCommandLineTool:(id)sender {
+    NSString *appPath = [NSBundle mainBundle].bundlePath;
+    if (!appPath.length) return;
+
+    NSString *systemTarget = @"/usr/local/bin/nextpad++";
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *script = _makeCLIScriptForApp(appPath);
+
+    // Idempotency: existing file already targets this same .app?
+    NSString *existing = [NSString stringWithContentsOfFile:systemTarget
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:nil];
+    NSString *appLine = [NSString stringWithFormat:@"APP=%@", _shellQuote(appPath)];
+    if (existing && [existing containsString:appLine]) {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = [[NppLocalizer shared] translate:@"Already installed"];
+        a.informativeText = [NSString stringWithFormat:@"nextpad++ is already installed at %@\n\nUsage:\n  nextpad++ file.txt\n  nextpad++ -n42 main.cpp", systemTarget];
+        [a runModal];
+        return;
+    }
+
+    // Try /usr/local/bin without elevation (works if user owns the dir,
+    // typically Homebrew Intel installs).
+    NSError *err = nil;
+    BOOL ok = _writeCLIScript(script, systemTarget, &err);
+
+    if (!ok) {
+        // Need admin. Offer two paths.
+        NSAlert *prompt = [[NSAlert alloc] init];
+        prompt.messageText = [[NppLocalizer shared] translate:@"Install nextpad++ Command Line Tool"];
+        prompt.informativeText = [NSString stringWithFormat:
+            @"Where would you like to install the 'nextpad++' command?\n\n"
+             "• /usr/local/bin (in default PATH — requires administrator password)\n"
+             "• ~/.local/bin (no password — you may need to add it to your PATH)"];
+        [prompt addButtonWithTitle:@"/usr/local/bin"];
+        [prompt addButtonWithTitle:@"~/.local/bin"];
+        [prompt addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+        NSModalResponse resp = [prompt runModal];
+
+        if (resp == NSAlertThirdButtonReturn) return; // Cancel
+
+        if (resp == NSAlertFirstButtonReturn) {
+            // Admin install: write the script to /tmp (no auth) and then
+            // privilege-escalate just the move + chmod. Avoids embedding
+            // multi-line script content inside a single AppleScript shell
+            // command, which would need fragile heredoc/escape gymnastics.
+            NSString *tmpPath = [NSString stringWithFormat:@"/tmp/nextpad++.cli.%d",
+                                 (int)getpid()];
+            NSError *werr = nil;
+            if (![script writeToFile:tmpPath atomically:YES
+                            encoding:NSUTF8StringEncoding error:&werr]) {
+                NSAlert *a = [[NSAlert alloc] init];
+                a.messageText = [[NppLocalizer shared] translate:@"Installation failed"];
+                a.informativeText = werr.localizedDescription ?: @"Could not stage temp file.";
+                [a runModal];
+                return;
+            }
+
+            NSString *aplScript = [NSString stringWithFormat:
+                @"do shell script \"mkdir -p /usr/local/bin && mv %@ %@ && chmod 755 %@\" with administrator privileges",
+                _shellQuote(tmpPath), _shellQuote(systemTarget), _shellQuote(systemTarget)];
+            NSDictionary *errInfo = nil;
+            [[[NSAppleScript alloc] initWithSource:aplScript] executeAndReturnError:&errInfo];
+            [fm removeItemAtPath:tmpPath error:nil]; // cleanup if mv didn't run
+
+            NSAlert *a = [[NSAlert alloc] init];
+            if (errInfo) {
+                a.messageText = [[NppLocalizer shared] translate:@"Installation failed"];
+                a.informativeText = errInfo[NSAppleScriptErrorMessage] ?: @"Unknown error.";
+            } else {
+                a.messageText = [[NppLocalizer shared] translate:@"Installed"];
+                a.informativeText = [NSString stringWithFormat:@"nextpad++ command installed at %@\n\nUsage:\n  nextpad++ file.txt\n  nextpad++ -n42 main.cpp", systemTarget];
+            }
+            [a runModal];
+            return;
+        }
+
+        // resp == NSAlertSecondButtonReturn — fallback to ~/.local/bin
+        NSString *userBinDir = [NSHomeDirectory() stringByAppendingPathComponent:@".local/bin"];
+        [fm createDirectoryAtPath:userBinDir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *userTarget = [userBinDir stringByAppendingPathComponent:@"nextpad++"];
+        err = nil;
+        ok = _writeCLIScript(script, userTarget, &err);
+
+        if (!ok) {
+            NSAlert *a = [[NSAlert alloc] init];
+            a.messageText = [[NppLocalizer shared] translate:@"Installation failed"];
+            a.informativeText = err.localizedDescription ?: @"Unknown error.";
+            [a runModal];
+            return;
+        }
+
+        // Symlink succeeded. Decide PATH-status messaging.
+        NSString *pathEnv = NSProcessInfo.processInfo.environment[@"PATH"] ?: @"";
+        BOOL onPath = [[pathEnv componentsSeparatedByString:@":"] containsObject:userBinDir];
+
+        if (onPath) {
+            NSAlert *a = [[NSAlert alloc] init];
+            a.messageText = [[NppLocalizer shared] translate:@"Installed"];
+            a.informativeText = [NSString stringWithFormat:@"nextpad++ command installed at %@\n\nUsage:\n  nextpad++ file.txt\n  nextpad++ -n42 main.cpp", userTarget];
+            [a runModal];
+            return;
+        }
+
+        // Not on PATH — make this prominent and offer one-click fixes.
+        // Detect the user's shell from $SHELL and pick the right rc file.
+        NSString *shellPath = NSProcessInfo.processInfo.environment[@"SHELL"] ?: @"/bin/zsh";
+        NSString *shellName = shellPath.lastPathComponent;
+        NSString *configPath, *exportLine;
+        if ([shellName isEqualToString:@"bash"]) {
+            configPath = [NSHomeDirectory() stringByAppendingPathComponent:@".bash_profile"];
+            exportLine = @"export PATH=\"$HOME/.local/bin:$PATH\"";
+        } else if ([shellName isEqualToString:@"fish"]) {
+            configPath = [NSHomeDirectory() stringByAppendingPathComponent:@".config/fish/config.fish"];
+            exportLine = @"fish_add_path -U $HOME/.local/bin";
+        } else {
+            // zsh is macOS default since Catalina; everything else falls back here
+            configPath = [NSHomeDirectory() stringByAppendingPathComponent:@".zshrc"];
+            exportLine = @"export PATH=\"$HOME/.local/bin:$PATH\"";
+        }
+        NSString *configDisplay = [configPath stringByReplacingOccurrencesOfString:NSHomeDirectory() withString:@"~"];
+
+        NSAlert *a = [[NSAlert alloc] init];
+        a.alertStyle = NSAlertStyleWarning;
+        a.messageText = [[NppLocalizer shared] translate:
+            @"Installed — but ~/.local/bin is not on your PATH"];
+        a.informativeText = [NSString stringWithFormat:
+            @"nextpad++ is installed at %@, but typing 'nextpad++' in a "
+             "terminal will give 'command not found' until ~/.local/bin is "
+             "on your $PATH.\n\n"
+             "Add this line to %@:\n\n"
+             "    %@\n\n"
+             "Then open a new Terminal window. The buttons below can do "
+             "this for you.",
+            userTarget, configDisplay, exportLine];
+        [a addButtonWithTitle:[NSString stringWithFormat:@"Add to %@", configDisplay.lastPathComponent]];
+        [a addButtonWithTitle:@"Copy command"];
+        [a addButtonWithTitle:@"OK"];
+        NSModalResponse pathResp = [a runModal];
+
+        if (pathResp == NSAlertFirstButtonReturn) {
+            // Append the export line to the shell config file (idempotent).
+            NSString *current = [NSString stringWithContentsOfFile:configPath
+                                                          encoding:NSUTF8StringEncoding
+                                                             error:nil] ?: @"";
+            NSAlert *follow = [[NSAlert alloc] init];
+            if ([current rangeOfString:exportLine].location != NSNotFound) {
+                follow.messageText = [[NppLocalizer shared] translate:@"Already in your config"];
+                follow.informativeText = [NSString stringWithFormat:
+                    @"%@ already contains the export line. Open a new "
+                     "Terminal window for it to take effect.", configDisplay];
+            } else {
+                NSString *prefix = current.length && ![current hasSuffix:@"\n"] ? @"\n" : @"";
+                NSString *appended = [current stringByAppendingFormat:
+                    @"%@\n# Added by Notepad++ — nextpad++ CLI\n%@\n",
+                    prefix, exportLine];
+                NSError *werr = nil;
+                BOOL wrote = [appended writeToFile:configPath
+                                        atomically:YES
+                                          encoding:NSUTF8StringEncoding
+                                             error:&werr];
+                if (wrote) {
+                    follow.messageText = [[NppLocalizer shared] translate:@"Added to PATH"];
+                    follow.informativeText = [NSString stringWithFormat:
+                        @"Added the export line to %@. Open a new Terminal "
+                         "window for it to take effect — then 'nextpad++' "
+                         "will work.", configDisplay];
+                } else {
+                    follow.alertStyle = NSAlertStyleCritical;
+                    follow.messageText = [[NppLocalizer shared] translate:@"Could not write"];
+                    follow.informativeText = werr.localizedDescription ?: @"Unknown error.";
+                }
+            }
+            [follow runModal];
+        } else if (pathResp == NSAlertSecondButtonReturn) {
+            // Copy the export line to the clipboard.
+            NSPasteboard *pb = [NSPasteboard generalPasteboard];
+            [pb clearContents];
+            [pb setString:exportLine forType:NSPasteboardTypeString];
+            NSAlert *follow = [[NSAlert alloc] init];
+            follow.messageText = [[NppLocalizer shared] translate:@"Copied"];
+            follow.informativeText = [NSString stringWithFormat:
+                @"Paste this into %@ (or your shell config) and open a "
+                 "new Terminal window.", configDisplay];
+            [follow runModal];
+        }
+        return;
+    }
+
+    // Plain (non-elevated) install succeeded — user owns /usr/local/bin.
+    NSAlert *a = [[NSAlert alloc] init];
+    a.messageText = [[NppLocalizer shared] translate:@"Installed"];
+    a.informativeText = [NSString stringWithFormat:@"nextpad++ command installed at %@\n\nUsage:\n  nextpad++ file.txt\n  nextpad++ -n42 main.cpp", systemTarget];
+    [a runModal];
 }
 
 // ── Dark mode ────────────────────────────────────────────────────────────────
@@ -8374,7 +8687,21 @@ static int64_t _sysctlInt(const char *name) {
     // Windows NPP behaviour: no save prompts on quit.
     // Back up all modified editors to ~/.notepad++/backup/ and save session.
     // On next launch, modified files reload from backup and show as unsaved.
-    [self saveSession];
+    //
+    // Issue #87 — gate the session save on the new "Remember current session
+    // for next launch" pref AND on -nosession CLI flag (matches Windows NPP
+    // behaviour: both pref-off and -nosession suppress the per-launch save so
+    // a stale session.plist isn't left behind to surprise the user later).
+    // Auto-backup of unsaved files runs separately on its own timer and is
+    // intentionally NOT coupled — losing unsaved work to a crash is a separate
+    // concern from reopening tabs across launches.
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL rememberSession = [ud boolForKey:kPrefRememberSession];
+    AppDelegate *appDel = (AppDelegate *)NSApp.delegate;
+    BOOL cliNoSession = [appDel isKindOfClass:[AppDelegate class]] ? appDel.cliParams.noSession : NO;
+    if (rememberSession && !cliNoSession) {
+        [self saveSession];
+    }
     writeConfigXML();
     return YES;
 }

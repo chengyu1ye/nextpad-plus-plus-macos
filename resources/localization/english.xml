@@ -1535,6 +1535,7 @@ You can re-activate this dialog in Preferences later."/>
 				<Item id="90075" name="Enable auto-backup"/>
 				<Item id="90076" name="Backup interval (seconds):"/>
 				<Item id="90077" name="Backup location:"/>
+				<Item id="90225" name="Remember current session for next launch"/>
 				<Item id="90078" name="Colour Style"/>
 				<Item id="90079" name="(inherit)"/>
 				<Item id="90080" name="Import Style Theme"/>

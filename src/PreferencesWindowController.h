@@ -25,6 +25,7 @@ extern NSString *const kPrefEOLType;
 extern NSString *const kPrefEncoding;
 extern NSString *const kPrefAutoBackup;
 extern NSString *const kPrefBackupInterval;
+extern NSString *const kPrefRememberSession;     // BOOL, default YES — when off, app starts with a clean editor on each launch (issue #87)
 extern NSString *const kPrefZoomLevel;
 extern NSString *const kPrefSpellCheck;          // BOOL, default NO
 extern NSString *const kPrefAutoCompleteEnable;  // BOOL, default YES
@@ -35,7 +36,7 @@ extern NSString *const kPrefCaretWidth;          // NSInteger 1-3, default 1
 extern NSString *const kPrefTabMaxLabelWidth;    // NSInteger pixels, default 190
 extern NSString *const kPrefTabCloseButton;      // BOOL, default YES
 extern NSString *const kPrefDoubleClickTabClose; // BOOL, default NO
-extern NSString *const kPrefTabBarWrap;          // BOOL, default YES
+extern NSString *const kPrefTabBarWrap;          // BOOL, default NO
 extern NSString *const kPrefVirtualSpace;        // BOOL, default NO
 extern NSString *const kPrefScrollBeyondLastLine;// BOOL, default NO
 extern NSString *const kPrefCaretBlinkRate;      // NSInteger ms, default 500

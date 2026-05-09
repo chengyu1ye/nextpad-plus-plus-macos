@@ -854,9 +854,21 @@ static NSString *_userThemesDir(void) {
     if (idx < 0 || idx >= (NSInteger)_workingLexers.count) return;
     _currentStyles = _workingLexers[idx].styles;
     [_styleTable reloadData];
-    [_styleTable deselectAll:nil];
-    _selectedStyleID = -1;
-    [self _clearRightPanel];
+    if (_currentStyles.count > 0) {
+        // Auto-select the first row so the font / size / colour controls
+        // have a target to write into. Without this the user can adjust
+        // controls and click Save & Close with no row selected; every
+        // callback short-circuits at `if (!e) return;` and nothing
+        // persists — the silent no-op trap behind issue #52.
+        // tableViewSelectionDidChange: then drives _updateRightPanelForStyle:
+        // which populates the right panel from the freshly-selected entry.
+        [_styleTable selectRowIndexes:[NSIndexSet indexSetWithIndex:0]
+                 byExtendingSelection:NO];
+    } else {
+        [_styleTable deselectAll:nil];
+        _selectedStyleID = -1;
+        [self _clearRightPanel];
+    }
 }
 
 - (void)_clearRightPanel {

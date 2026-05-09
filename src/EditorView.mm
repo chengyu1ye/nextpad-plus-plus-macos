@@ -2001,11 +2001,41 @@ static int vkToScintillaKey(int vk) {
         };
     });
 
+    // Issue #28 — LexHTML's WordListSet uses bespoke slot semantics that
+    // diverge from the universal `instre1=0` convention. The slot layout
+    // (htmlWordListDesc[] in lexilla/lexers/LexHTML.cxx) is:
+    //   0 = HTML elements & attributes (lowercased)
+    //   1 = JavaScript keywords
+    //   2 = VBScript keywords
+    //   3 = Python keywords
+    //   4 = PHP keywords
+    //   5 = SGML/DTD keywords
+    // langs.xml exposes each language's keywords under `instre1` (and HTML
+    // also under `instre2` for DTD), so without an override:
+    //   • PHP keywords land in slot 0 → never matched as SCE_HPHP_WORD
+    //   • ASP/VB keywords land in slot 0 → never matched as SCE_HB_WORD
+    //   • HTML's instre2 (DTD) lands in slot 2 (VBScript) → never matched
+    //   • XML's instre1 (DTD) lands in slot 0 → never matched
+    // All other 127 Lexilla lexers follow `slot 0 = primary keywords`, so the
+    // generic mapping is correct for them. The override only triggers for
+    // LexHTML-family languages.
+    NSDictionary<NSString *, NSNumber *> *idxOverride = nil;
+    if ([kwLang isEqualToString:@"php"]) {
+        idxOverride = @{ @"instre1": @4 };               // PHP keywords
+    } else if ([kwLang isEqualToString:@"asp"]) {
+        idxOverride = @{ @"instre1": @2 };               // VBScript keywords
+    } else if ([kwLang isEqualToString:@"html"]) {
+        idxOverride = @{ @"instre2": @5 };               // SGML/DTD; instre1 already correct (HTML tags → slot 0)
+    } else if ([kwLang isEqualToString:@"xml"]) {
+        idxOverride = @{ @"instre1": @5 };               // SGML/DTD
+    }
+
     // Feed keywords from langs.xml for all keyword classes
     for (NSString *kwClass in kwClassToIndex) {
         NSString *kw = [lm keywordsForLanguage:kwLang keywordClass:kwClass];
         if (!kw.length) continue;
-        NSInteger idx = kwClassToIndex[kwClass].integerValue;
+        NSNumber *ov = idxOverride[kwClass];
+        NSInteger idx = ov ? ov.integerValue : kwClassToIndex[kwClass].integerValue;
         const char *utf8 = kw.UTF8String;
         [sci message:SCI_SETKEYWORDS wParam:(uptr_t)idx lParam:(sptr_t)utf8];
         fed = YES;
@@ -2942,7 +2972,11 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
         int flags = 0;
         if ([ud boolForKey:kPrefSmartHiliteCase]) flags |= SCFIND_MATCHCASE;
         if ([ud boolForKey:kPrefSmartHiliteWord]) flags |= SCFIND_WHOLEWORD;
-        if (!flags) flags = SCFIND_WHOLEWORD | SCFIND_MATCHCASE; // default behavior
+        // Issue #64 — both options OFF should mean substring + case-insensitive
+        // (Windows NPP parity). The fallback below forced WHOLEWORD|MATCHCASE
+        // and made the four toggle states non-orthogonal vs the labels.
+        // Keeping commented out in case we want to revert.
+        // if (!flags) flags = SCFIND_WHOLEWORD | SCFIND_MATCHCASE; // default behavior
         [sci message:SCI_SETSEARCHFLAGS wParam:(uptr_t)flags];
     }
 

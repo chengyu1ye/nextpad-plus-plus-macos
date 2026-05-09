@@ -119,7 +119,11 @@ static const KeyToCommand macMapDefault[] = {
 	{Keys::Next,      SCI_ASHIFT, Message::PageDownRectExtend},
 	{Keys::Delete,    SCI_NORM,   Message::Clear},
 	{Keys::Delete,    SCI_SHIFT,  Message::Cut},
-	{Keys::Delete,    SCI_CTRL,   Message::DelWordRight},
+	// Cmd+Forward-Delete on macOS — translated by Cocoa as Ctrl. AppKit
+	// has no NSResponder selector bound to this combo, so the fix lives
+	// here in the keymap rather than via interpretKeyEvents. Matches
+	// Cmd+Backspace (DelLineLeft, dispatched via deleteToBeginningOfLine:).
+	{Keys::Delete,    SCI_CTRL,   Message::DelLineRight},
 	{Keys::Delete,    SCI_CSHIFT, Message::DelLineRight},
 	{Keys::Insert,    SCI_NORM,   Message::EditToggleOvertype},
 	{Keys::Insert,    SCI_SHIFT,  Message::Paste},
@@ -2294,6 +2298,28 @@ bool ScintillaCocoa::KeyboardInput(NSEvent *event) {
 		NSEventModifierFlags modifierFlags = event.modifierFlags;
 
 		Keys key = KeyTranslate(originalKey, modifierFlags);
+
+		// Let AppKit's interpretKeyEvents dispatch the standard macOS
+		// text-edit shortcuts via NSResponder selectors instead of
+		// firing Scintilla's own command (which is keyed off Windows
+		// conventions). Cmd→Ctrl and Option→Alt translation in
+		// TranslateModifierFlags below would otherwise route:
+		//   Cmd+Backspace     → Ctrl+Back  → DelWordLeft  (wrong; want DelLineLeft)
+		//   Option+Backspace  → Alt+Back   → DelWordLeft  (right action, but route via selector for consistency / System Settings)
+		//   Option+Delete fwd → Alt+Delete → (no entry, falls through)
+		// Short-circuit only the three combos that AppKit binds to a
+		// matching selector. Cmd+Delete fwd is NOT bound by AppKit, so
+		// it stays in Scintilla's keymap (fixed there separately).
+		const NSEventModifierFlags allMods =
+			NSEventModifierFlagCommand | NSEventModifierFlagOption |
+			NSEventModifierFlagShift   | NSEventModifierFlagControl;
+		const NSEventModifierFlags onlyMods = modifierFlags & allMods;
+		const bool cmdOnly    = (onlyMods == NSEventModifierFlagCommand);
+		const bool optionOnly = (onlyMods == NSEventModifierFlagOption);
+		if ((key == Keys::Back   && (cmdOnly || optionOnly)) ||
+		    (key == Keys::Delete &&  optionOnly)) {
+			continue;
+		}
 
 		bool consumed = false; // Consumed as command?
 

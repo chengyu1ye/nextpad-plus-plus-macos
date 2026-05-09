@@ -217,6 +217,7 @@ static NSMenu *buildLanguageMenu() {
     appItem.submenu = appMenu;
     [appMenu addItemWithTitle:@"About Notepad++" action:@selector(showAboutPanel:) keyEquivalent:@""];
     [appMenu addItemWithTitle:@"Check for Updates…" action:@selector(checkForUpdates:) keyEquivalent:@""];
+    [appMenu addItemWithTitle:@"Install nextpad++ Command Line Tool…" action:@selector(installCommandLineTool:) keyEquivalent:@""];
     addSep(appMenu);
     [appMenu addItemWithTitle:@"Hide Notepad++" action:@selector(hide:) keyEquivalent:@"h"];
     NSMenuItem *hideOthers = [appMenu addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
@@ -681,7 +682,9 @@ static NSMenu *buildLanguageMenu() {
     // ── Navigation ──
     [tabViewMenu addItem:item(@"First Tab",    @selector(selectFirstTab:),    @"")];
     [tabViewMenu addItem:item(@"Last Tab",     @selector(selectLastTab:),     @"")];
-    [tabViewMenu addItem:item(@"Multi-line Tabs", @selector(toggleTabBarWrap:), @"")];
+    // Match the Preferences > Tab Bar checkbox label so the existing
+    // localization entry (id=90224) translates this menu item too.
+    [tabViewMenu addItem:item(@"Wrap tabs to multiple lines", @selector(toggleTabBarWrap:), @"")];
     {
         unichar pgdn = NSPageDownFunctionKey;
         unichar pgup = NSPageUpFunctionKey;
