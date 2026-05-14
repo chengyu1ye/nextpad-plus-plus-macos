@@ -8,10 +8,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// Notification posted after all plugins have been loaded and NPPN_READY fired.
 extern NSNotificationName const NppPluginsDidLoadNotification;
 
-/// Manages the lifecycle of Notepad++ dylib plugins on macOS.
+/// Manages the lifecycle of Nextpad++ dylib plugins on macOS.
 ///
 /// Responsibilities:
-///   - Discover and load .dylib plugins from ~/.notepad++/plugins/
+///   - Discover and load .dylib plugins from ~/.nextpad++/plugins/
 ///   - Resolve the 5 mandatory C exports (setInfo, getName, etc.)
 ///   - Build NppData with opaque handles and a sendMessage function pointer
 ///   - Dispatch NPPM_* messages from plugins to the host

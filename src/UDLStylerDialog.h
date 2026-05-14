@@ -2,7 +2,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// Modal Styler dialog for UDL styles. Matches the Windows Notepad++ Styler Dialog.
+/// Modal Styler dialog for UDL styles. Matches the Windows Nextpad++ Styler Dialog.
 /// Shows Font options (name, size, bold/italic/underline, foreground/background colors)
 /// and optionally a Nesting section (for delimiter/comment styles).
 @interface UDLStylerDialog : NSObject

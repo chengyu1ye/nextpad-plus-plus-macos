@@ -16,9 +16,11 @@
 #import "ScintillaMessages.h"
 #include "SciLexer.h"
 #include <CommonCrypto/CommonDigest.h>
+#include <vector>
 
 NSNotificationName const EditorViewCursorDidMoveNotification = @"EditorViewCursorDidMoveNotification";
 NSNotificationName const EditorViewDidGainFocusNotification  = @"EditorViewDidGainFocusNotification";
+NSNotificationName const EditorViewDidSaveNotification        = @"EditorViewDidSaveNotification";
 NSNotificationName const EditorViewDidScrollNotification = @"EditorViewDidScrollNotification";
 
 // Forward-declare Lexilla's CreateLexer (statically linked)
@@ -270,8 +272,18 @@ static inline NSStringEncoding nppEnc(CFStringEncoding cf) {
     return CFStringConvertEncodingToNSStringEncoding(cf);
 }
 
-// Files larger than this get a warning + large-file mode (no syntax, no undo).
-static const NSUInteger kLargeFileThreshold = 50 * 1024 * 1024; // 50 MB
+// Files larger than the threshold get a warning + large-file mode (no syntax,
+// no undo, plus per-feature gates from Performance prefs). When the user has
+// disabled "Enable Large File Restriction" entirely, returns SIZE_MAX so no
+// file ever crosses the threshold.
+static NSUInteger nppLargeFileThreshold(void) {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if (![ud boolForKey:kPrefLargeFileEnabled]) return NSUIntegerMax;
+    NSInteger mb = [ud integerForKey:kPrefLargeFileSizeMB];
+    if (mb < 1)    mb = 1;
+    if (mb > 2046) mb = 2046;
+    return (NSUInteger)mb * 1024UL * 1024UL;
+}
 
 @implementation EditorView {
     BOOL    _isModified;
@@ -417,24 +429,32 @@ static const NSUInteger kLargeFileThreshold = 50 * 1024 * 1024; // 50 MB
     NSUInteger fileSize = 0;
     if (attrs) fileSize = (NSUInteger)[attrs[NSFileSize] unsignedLongLongValue];
 
-    BOOL large = (fileSize > kLargeFileThreshold);
+    BOOL large = (fileSize > nppLargeFileThreshold());
     if (large) {
-        NSString *sizeMB = [NSString stringWithFormat:@"%.0f MB",
-                            fileSize / (1024.0 * 1024.0)];
-        NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Large File Warning";
-        alert.informativeText = [NSString stringWithFormat:
-            @"This file is %@. Opening it will disable syntax highlighting "
-            @"and undo history to keep the app responsive.\n\n"
-            @"Do you want to continue?", sizeMB];
-        [alert addButtonWithTitle:@"Open Anyway"];
-        [alert addButtonWithTitle:@"Cancel"];
-        alert.alertStyle = NSAlertStyleWarning;
-        if ([alert runModal] != NSAlertFirstButtonReturn) {
-            if (error) *error = [NSError errorWithDomain:NSCocoaErrorDomain
-                                                    code:NSUserCancelledError
-                                                userInfo:nil];
-            return NO;
+        // The 2 GB suppress-warning toggle silences the dialog ONLY for files
+        // ≥2 GB — smaller large files still prompt the user, since the prompt
+        // there is more about "you're about to lose syntax/undo" than
+        // "this might hang the app." Matches Windows NPP behavior.
+        BOOL suppress2GB = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefLargeFileSuppress2GBWarning]
+                           && fileSize >= (2ULL * 1024 * 1024 * 1024);
+        if (!suppress2GB) {
+            NSString *sizeMB = [NSString stringWithFormat:@"%.0f MB",
+                                fileSize / (1024.0 * 1024.0)];
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.messageText = @"Large File Warning";
+            alert.informativeText = [NSString stringWithFormat:
+                @"This file is %@. Opening it will disable syntax highlighting "
+                @"and undo history to keep the app responsive.\n\n"
+                @"Do you want to continue?", sizeMB];
+            [alert addButtonWithTitle:@"Open Anyway"];
+            [alert addButtonWithTitle:@"Cancel"];
+            alert.alertStyle = NSAlertStyleWarning;
+            if ([alert runModal] != NSAlertFirstButtonReturn) {
+                if (error) *error = [NSError errorWithDomain:NSCocoaErrorDomain
+                                                        code:NSUserCancelledError
+                                                    userInfo:nil];
+                return NO;
+            }
         }
     }
 
@@ -466,35 +486,83 @@ static const NSUInteger kLargeFileThreshold = 50 * 1024 * 1024; // 50 MB
         textData = [rawData subdataWithRange:NSMakeRange(2, len - 2)];
     }
 
-    // ── Convert to UTF-8 bytes for Scintilla ─────────────────────────────────
+    // ── Convert to UTF-8 bytes for Scintilla (Phase 2 optimised) ─────────────
     // We must avoid [ScintillaView setString:] because it calls SCI_SETTEXT
-    // which uses strlen() and truncates at the first null byte.
-    // Instead, convert to UTF-8 NSData and use SCI_ADDTEXT with explicit length.
-
+    // which uses strlen() and truncates at the first null byte. Instead pass
+    // a UTF-8 NSData payload to SCI_ADDTEXT with explicit length.
+    //
+    // Phase 2 rules:
+    //   • Small files: full UTF-8 validation pass + Win-1252 / Latin-1
+    //     fallbacks (cheap on small inputs, matches NPP-Win behaviour).
+    //   • Large files (>=threshold): head/tail UTF-8 probe instead of a
+    //     full-file walk. If both 1 MB ends decode as UTF-8 we treat the
+    //     whole thing as UTF-8 and pass mmap'd bytes straight to Scintilla.
+    //     Probe boundaries are slid off any UTF-8 continuation byte.
+    //   • Huge non-UTF-8 file: byte-pass-through as Latin-1 (no full-file
+    //     conversion). Bytes >= 0x80 may render as U+FFFD; user already
+    //     accepted "no syntax highlighting" for this file.
     NSData *utf8Data = nil;
 
     if (hasBOM && enc != NSUTF8StringEncoding) {
-        // BOM-detected UTF-16: convert to UTF-8 via NSString
+        // BOM-detected UTF-16: convert to UTF-8 via NSString. UTF-16-BOM'd
+        // multi-GB files exist but are vanishingly rare; we accept the cost.
         NSString *content = [[NSString alloc] initWithData:textData encoding:enc];
         if (content)
             utf8Data = [content dataUsingEncoding:NSUTF8StringEncoding];
     }
 
     if (!utf8Data) {
-        // Try UTF-8 first (most common case) — use raw bytes directly
-        NSString *probe = [[NSString alloc] initWithData:rawData encoding:NSUTF8StringEncoding];
-        if (probe) {
-            enc = NSUTF8StringEncoding;
-            utf8Data = hasBOM ? textData : rawData;  // already UTF-8
+        BOOL isUTF8 = NO;
+        if (large) {
+            // ── Head/tail UTF-8 probe (Phase 2 #3) ─────────────────────────
+            // Walking a 3 GB buffer just to validate UTF-8 wasted ~10 s in the
+            // baseline. Probing the first/last 1 MB and accepting on success
+            // is correct for any file that's UTF-8 throughout, and the
+            // boundary-slide ensures we never split a multi-byte sequence.
+            const NSUInteger kProbeBytes = (NSUInteger)1 * 1024 * 1024;
+            NSUInteger probeLen = MIN(kProbeBytes, len);
+            // Slide the head probe end backwards off any UTF-8 continuation
+            // byte (10xxxxxx) so we never falsely fail on a sliced sequence.
+            NSUInteger headEnd = probeLen;
+            while (headEnd > 0 && (b[headEnd] & 0xC0) == 0x80) headEnd--;
+            NSData *headProbe = [rawData subdataWithRange:NSMakeRange(0, headEnd)];
+            BOOL headValid = ([[NSString alloc] initWithData:headProbe
+                                                    encoding:NSUTF8StringEncoding] != nil);
+            BOOL tailValid = YES;
+            if (len > probeLen) {
+                NSUInteger tailStart = len - probeLen;
+                while (tailStart < len && (b[tailStart] & 0xC0) == 0x80) tailStart++;
+                NSData *tailProbe = [rawData subdataWithRange:
+                                     NSMakeRange(tailStart, len - tailStart)];
+                tailValid = ([[NSString alloc] initWithData:tailProbe
+                                                   encoding:NSUTF8StringEncoding] != nil);
+            }
+            isUTF8 = headValid && tailValid;
         } else {
-            // Try Windows-1252, then Latin-1
+            // Small file — full validation (same path as before).
+            isUTF8 = ([[NSString alloc] initWithData:rawData
+                                            encoding:NSUTF8StringEncoding] != nil);
+        }
+
+        if (isUTF8) {
+            // Phase 2 #4: when payload is UTF-8 already, pass mmap'd bytes
+            // directly to SCI_ADDTEXT — no NSString round-trip, no extra copy.
+            enc = NSUTF8StringEncoding;
+            utf8Data = hasBOM ? textData : rawData;
+        } else if (large) {
+            // Huge non-UTF-8: byte-as-Latin-1 (no full-file walk).
+            enc = NSISOLatin1StringEncoding;
+            utf8Data = rawData;
+        } else {
+            // Small non-UTF-8: try Win-1252, then Latin-1 (cheap walk on small).
             NSStringEncoding win1252 = nppEnc(kCFStringEncodingWindowsLatin1);
             NSString *content = [[NSString alloc] initWithData:rawData encoding:win1252];
             if (content) {
                 enc = win1252;
                 utf8Data = [content dataUsingEncoding:NSUTF8StringEncoding];
             } else {
-                content = [[NSString alloc] initWithData:rawData encoding:NSISOLatin1StringEncoding];
+                content = [[NSString alloc] initWithData:rawData
+                                                encoding:NSISOLatin1StringEncoding];
                 if (content) {
                     enc = NSISOLatin1StringEncoding;
                     utf8Data = [content dataUsingEncoding:NSUTF8StringEncoding];
@@ -504,12 +572,43 @@ static const NSUInteger kLargeFileThreshold = 50 * 1024 * 1024; // 50 MB
     }
 
     if (!utf8Data) {
-        // Last resort: load raw bytes as-is (binary file)
+        // Final fallback — load raw bytes as-is.
         enc = NSISOLatin1StringEncoding;
         utf8Data = rawData;
     }
 
-    // Load into Scintilla using SCI_ADDTEXT with explicit length — binary safe
+    // Phase 2 #1+#2: every load swaps to a fresh Scintilla document so the
+    // options match the file state. Large files get TEXT_LARGE (64-bit
+    // Position type → no silent >2 GB wraparound) + STYLES_NONE (skip the
+    // per-byte styles array — we already disable syntax highlighting in
+    // large mode, so this is a free ~50% RAM cut). Small files get DEFAULT
+    // options. Always swapping handles the reload-after-shrink edge case
+    // (tab previously held a 3 GB file gets STYLES_NONE; if that tab is then
+    // reloaded with a tiny file, we want syntax highlighting back).
+    int docOptions = large ? (SC_DOCUMENTOPTION_TEXT_LARGE | SC_DOCUMENTOPTION_STYLES_NONE)
+                           : SC_DOCUMENTOPTION_DEFAULT;
+    sptr_t newDoc = [_scintillaView message:SCI_CREATEDOCUMENT
+                                     wParam:(uptr_t)utf8Data.length
+                                     lParam:docOptions];
+    if (newDoc) {
+        [_scintillaView message:SCI_SETDOCPOINTER wParam:0 lParam:newDoc];
+        [_scintillaView message:SCI_RELEASEDOCUMENT wParam:0 lParam:newDoc];
+    }
+
+    // ── Pre-insert undo gate for large files (Phase 2.6) ─────────────────────
+    // Disabling SCI_SETUNDOCOLLECTION BEFORE SCI_ADDTEXT prevents Scintilla's
+    // UndoHistory from copying the full insert payload into its scrap buffer.
+    // The scrap buffer is a std::string whose capacity is never released by
+    // SCI_EMPTYUNDOBUFFER (which calls .clear() — std::string::clear retains
+    // capacity). Without this gate, opening a 2.78 GB file holds ~2.78 GB of
+    // scrap capacity in RAM forever, on top of the document's own buffer.
+    // Small files keep the existing behavior (undo on during load, then
+    // SCI_EMPTYUNDOBUFFER below); the per-tab waste is bounded by file size.
+    if (large) {
+        [_scintillaView message:SCI_SETUNDOCOLLECTION wParam:0 lParam:0];
+    }
+
+    // Load into Scintilla using SCI_ADDTEXT with explicit length — binary safe.
     [_scintillaView message:SCI_CLEARALL wParam:0 lParam:0];
     [_scintillaView message:SCI_ADDTEXT
                      wParam:(uptr_t)utf8Data.length
@@ -525,9 +624,16 @@ static const NSUInteger kLargeFileThreshold = 50 * 1024 * 1024; // 50 MB
     NSString *ext = path.pathExtension.lowercaseString;
     NSString *lang = extensionLanguageMap()[ext] ?: @"";
     if (large) {
-        // Disable syntax highlighting and undo for large files to stay responsive.
+        // Syntax highlighting off (undo was already disabled before SCI_ADDTEXT
+        // above — see "Pre-insert undo gate" comment).
         [self setLanguage:@""];
-        [_scintillaView message:SCI_SETUNDOCOLLECTION wParam:0 lParam:0];
+        // Performance pref — turn off word wrap for large files. Word-wrap on
+        // a multi-million-line buffer is dominated by wrap-recompute time, so
+        // even users who normally wrap usually want it off for huge files.
+        if ([[NSUserDefaults standardUserDefaults] boolForKey:kPrefLargeFileNoWrap]) {
+            _wordWrapEnabled = NO;
+            [_scintillaView message:SCI_SETWRAPMODE wParam:SC_WRAP_NONE];
+        }
     } else {
         [self setLanguage:lang];
         // Re-enable undo in case this tab was previously in large-file mode.
@@ -539,6 +645,10 @@ static const NSUInteger kLargeFileThreshold = 50 * 1024 * 1024; // 50 MB
     // Tell change history that the just-loaded content IS the save baseline —
     // without this every line would show as orange immediately after file open.
     [_scintillaView message:SCI_SETSAVEPOINT];
+
+    // SCI_SETWORDCHARS is per-document; Phase 2 always swaps to a fresh doc
+    // on each load, so re-apply the user's word-char preference here (issue #42).
+    [self applyWordCharsFromDefaults];
 
     // Record mtime from the stat we already performed at the top of this method.
     _lastKnownModDate = attrs[NSFileModificationDate];
@@ -571,32 +681,70 @@ static const NSUInteger kLargeFileThreshold = 50 * 1024 * 1024; // 50 MB
 }
 
 - (BOOL)saveToPath:(NSString *)path error:(NSError **)error {
-    NSString *content = _scintillaView.string;
+    BOOL ok = NO;
 
-    // Build the byte payload (BOM + encoded content).
-    NSMutableData *out = [NSMutableData data];
-    if (_hasBOM) {
-        if (_fileEncoding == NSUTF8StringEncoding) {
+    if (_fileEncoding == NSUTF8StringEncoding) {
+        // ── Zero-copy UTF-8 fast path (Phase 2.5) ─────────────────────────
+        // SCI_GETCHARACTERPOINTER asks Scintilla to compact its gap buffer
+        // so the document is one contiguous span, then returns a const char*
+        // into Scintilla's internal storage. We hand that pointer to NSData
+        // (no-copy wrapper) and write directly. No NSString allocation, no
+        // re-encoding pass. The pointer is invalidated by ANY subsequent
+        // edit — we only hold it for the synchronous writeToFile: call,
+        // and we're on the main thread, so no concurrent edits can occur.
+        ScintillaView *sci = _scintillaView;
+        intptr_t len = [sci message:SCI_GETLENGTH];
+        const char *bytes = (const char *)[sci message:SCI_GETCHARACTERPOINTER];
+
+        if (_hasBOM) {
+            // BOM-prefixed UTF-8: build a small buffer with the 3-byte BOM
+            // followed by the body. The body is one memcpy from Scintilla's
+            // pointer (no NSString round-trip — still ~50% RAM savings vs
+            // the previous path on huge files).
+            NSMutableData *out = [NSMutableData dataWithCapacity:(NSUInteger)len + 3];
             const uint8_t bom[] = {0xEF, 0xBB, 0xBF};
             [out appendBytes:bom length:3];
-        } else if (_fileEncoding == NSUTF16BigEndianStringEncoding) {
-            const uint8_t bom[] = {0xFE, 0xFF};
-            [out appendBytes:bom length:2];
-        } else if (_fileEncoding == NSUTF16LittleEndianStringEncoding) {
-            const uint8_t bom[] = {0xFF, 0xFE};
-            [out appendBytes:bom length:2];
+            if (len > 0 && bytes != NULL) [out appendBytes:bytes length:(NSUInteger)len];
+            ok = [out writeToFile:path atomically:YES];
+        } else {
+            // No BOM: full zero-copy path. NSData wraps Scintilla's pointer
+            // without copying; writeToFile streams it straight to disk.
+            NSData *body = (len > 0 && bytes != NULL)
+                ? [NSData dataWithBytesNoCopy:(void *)bytes
+                                       length:(NSUInteger)len
+                                 freeWhenDone:NO]
+                : [NSData data];
+            ok = [body writeToFile:path atomically:YES];
         }
+    } else {
+        // ── Non-UTF-8 path (unchanged from pre-Phase-2.5) ──────────────────
+        // BOM-detected UTF-16 LE/BE, or files explicitly converted to
+        // Win-1252 / Latin-1 via the Encoding menu. Scintilla stores the
+        // document as UTF-8 internally, so we must round-trip through
+        // NSString to re-encode. Acceptable cost on these formats — they're
+        // rare for huge files (no one keeps a 3 GB UTF-16-BOM CSV).
+        NSString *content = _scintillaView.string;
+        NSMutableData *out = [NSMutableData data];
+        if (_hasBOM) {
+            if (_fileEncoding == NSUTF16BigEndianStringEncoding) {
+                const uint8_t bom[] = {0xFE, 0xFF};
+                [out appendBytes:bom length:2];
+            } else if (_fileEncoding == NSUTF16LittleEndianStringEncoding) {
+                const uint8_t bom[] = {0xFF, 0xFE};
+                [out appendBytes:bom length:2];
+            }
+        }
+        NSData *body = [content dataUsingEncoding:_fileEncoding allowLossyConversion:YES];
+        if (!body) {
+            if (error) *error = [NSError errorWithDomain:NSCocoaErrorDomain
+                                                   code:NSFileWriteInapplicableStringEncodingError
+                                               userInfo:nil];
+            return NO;
+        }
+        [out appendData:body];
+        ok = [out writeToFile:path atomically:YES];
     }
-    NSData *body = [content dataUsingEncoding:_fileEncoding allowLossyConversion:YES];
-    if (!body) {
-        if (error) *error = [NSError errorWithDomain:NSCocoaErrorDomain
-                                               code:NSFileWriteInapplicableStringEncodingError
-                                           userInfo:nil];
-        return NO;
-    }
-    [out appendData:body];
 
-    BOOL ok = [out writeToFile:path atomically:YES];
     if (!ok) {
         if (error) *error = [NSError errorWithDomain:NSCocoaErrorDomain
                                                code:NSFileWriteUnknownError userInfo:nil];
@@ -633,7 +781,13 @@ static const NSUInteger kLargeFileThreshold = 50 * 1024 * 1024; // 50 MB
         [self setLanguage:lang];
     }
 
-    [self updateGitDiffMarkers];
+    // Issue #76 — DO NOT call updateGitDiffMarkers here unconditionally.
+    // It spawns /usr/bin/git, which on a Mac without Xcode CLT triggers the
+    // "Install Command Line Tools" prompt on every save. Instead post a
+    // notification; MainWindowController's handler gates the git work on
+    // GitPanel visibility (matches the existing pattern at MWC:6385).
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:EditorViewDidSaveNotification object:self];
 
     [[NppPluginManager shared] notifyPluginsWithCode:NPPN_FILESAVED
                                             bufferID:(intptr_t)(__bridge void *)self];
@@ -698,14 +852,29 @@ static const NSUInteger kLargeFileThreshold = 50 * 1024 * 1024; // 50 MB
     }
 
     // Scintilla stores content as UTF-8 bytes internally.
-    // For UTF-8 files: write raw bytes directly (no conversion needed).
-    // For non-UTF-8 files: convert via NSString (same as saveToPath:).
+    // Phase 2.5 — for UTF-8 files use SCI_GETCHARACTERPOINTER to read straight
+    // out of Scintilla's gap buffer (no malloc, no SCI_GETTEXT copy). One
+    // memcpy via appendBytes (only when BOM is present and we're already
+    // building a NSMutableData; otherwise we wrap zero-copy below).
     if (_fileEncoding == NSUTF8StringEncoding) {
-        char *buf = (char *)malloc((size_t)len + 1);
-        if (!buf) return nil;
-        [_scintillaView message:SCI_GETTEXT wParam:(uptr_t)(len + 1) lParam:(sptr_t)buf];
-        [out appendBytes:buf length:(NSUInteger)len];
-        free(buf);
+        const char *bytes = (const char *)[_scintillaView message:SCI_GETCHARACTERPOINTER];
+        if (_hasBOM) {
+            // BOM already appended above — just append body bytes (one memcpy).
+            if (len > 0 && bytes != NULL) [out appendBytes:bytes length:(NSUInteger)len];
+        } else {
+            // No BOM: skip building NSMutableData entirely, write zero-copy.
+            // (The `out` we built above is empty in this branch.)
+            NSData *body = (len > 0 && bytes != NULL)
+                ? [NSData dataWithBytesNoCopy:(void *)bytes
+                                       length:(NSUInteger)len
+                                 freeWhenDone:NO]
+                : [NSData data];
+            if ([body writeToFile:dest atomically:YES]) {
+                _backupFilePath = [dest copy];
+                return dest;
+            }
+            return nil;
+        }
     } else {
         NSString *content = _scintillaView.string;
         NSData *body = [content dataUsingEncoding:_fileEncoding allowLossyConversion:YES];
@@ -1743,7 +1912,7 @@ static int vkToScintillaKey(int vk) {
 }
 
 - (void)applyScintillaKeyOverrides {
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/shortcuts.xml"];
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (!data) return;
 
@@ -1793,6 +1962,32 @@ static int vkToScintillaKey(int vk) {
 }
 
 #pragma mark - Preferences
+
+/// Resize the line-number margin (margin 0) to fit the current line count
+/// at the current zoom level. No-op when line numbers are hidden or when
+/// kPrefLineNumDynWidth is OFF (in that case the fixed 44 px set by
+/// applyPreferencesFromDefaults remains in effect). Called from:
+///   • applyPreferencesFromDefaults  (theme / pref change, font change)
+///   • SCN_ZOOM                      (every zoom step — Scintilla raises
+///     this after the new zoom is committed, so SCI_TEXTWIDTH returns
+///     post-zoom pixels)
+/// SCI_TEXTWIDTH measures a ~10-char string (~µs) and SCI_SETMARGINWIDTHN
+/// short-circuits on unchanged width, so the helper is cheap to call on
+/// every zoom step even for very large files.
+- (void)recomputeLineNumberMargin {
+    ScintillaView *sci = _scintillaView;
+    if (!sci) return;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if (![ud boolForKey:kPrefShowLineNumbers]) return;
+    if (![ud boolForKey:kPrefLineNumDynWidth]) return;
+
+    sptr_t lineCount = [sci message:SCI_GETLINECOUNT];
+    NSString *measure = [NSString stringWithFormat:@"_%ld", (long)lineCount];
+    sptr_t width = [sci message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER
+                          lParam:(sptr_t)measure.UTF8String];
+    if (width < 30) width = 30;
+    [sci message:SCI_SETMARGINWIDTHN wParam:0 lParam:width];
+}
 
 - (void)applyPreferencesFromDefaults {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
@@ -1908,17 +2103,8 @@ static int vkToScintillaKey(int vk) {
     [sci message:SCI_SETMARGINRIGHT wParam:0 lParam:[ud integerForKey:kPrefPaddingRight]];
 
     // ── Line number dynamic width ──
-    if ([ud boolForKey:kPrefShowLineNumbers]) {
-        if ([ud boolForKey:kPrefLineNumDynWidth]) {
-            sptr_t lineCount = [sci message:SCI_GETLINECOUNT];
-            NSString *measure = [NSString stringWithFormat:@"_%ld", (long)lineCount];
-            sptr_t width = [sci message:SCI_TEXTWIDTH wParam:STYLE_LINENUMBER
-                                  lParam:(sptr_t)measure.UTF8String];
-            if (width < 30) width = 30;
-            [sci message:SCI_SETMARGINWIDTHN wParam:0 lParam:width];
-        }
-        // else: fixed 44px already set above
-    }
+    // Falls back to the fixed 44 px just set above when dyn-width is OFF.
+    [self recomputeLineNumberMargin];
 
     // ── Fold margin style ──
     {
@@ -1964,6 +2150,67 @@ static int vkToScintillaKey(int vk) {
     // ── Disable text drag-drop ──
     // Note: SCI_SETMOUSEDWELLTIME can disable drag; we use a simpler approach
     // by not processing drag events when disabled (handled in Scintilla Cocoa)
+
+    // ── Delimiter pane / word-char list (issue #42) ──
+    // SCI_SETWORDCHARS is per-document; we also re-apply at the end of
+    // loadFileAtPath: so the new doc (post-Phase-2 always-swap) inherits the
+    // user's setting.
+    [self applyWordCharsFromDefaults];
+}
+
+// Cached at first read so subsequent loads don't have to round-trip through
+// Scintilla. Reads SCI_GETWORDCHARS from a fresh view (Scintilla's stock
+// default per-class table). Falls back to a known-good ASCII set if Scintilla
+// returns nothing — should never trigger but keeps us defensive.
+static NSString *nppDefaultWordChars(ScintillaView *sci) {
+    static NSString *cached = nil;
+    if (cached) return cached;
+    sptr_t len = [sci message:SCI_GETWORDCHARS wParam:0 lParam:0];
+    if (len > 0) {
+        char *buf = (char *)malloc((size_t)len + 1);
+        if (buf) {
+            [sci message:SCI_GETWORDCHARS wParam:0 lParam:(sptr_t)buf];
+            buf[len] = '\0';
+            cached = [[NSString alloc] initWithUTF8String:buf] ?:
+                @"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+            free(buf);
+            return cached;
+        }
+    }
+    cached = @"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+    return cached;
+}
+
+// Apply the effective word-char set to Scintilla, derived from kPrefWordChars*.
+// Use-default → restore Scintilla's stock list. Custom → stock + user chars not
+// already present (matches Windows addCustomWordChars de-duplication). Only
+// printable ASCII from kPrefWordCharsAdded is honored; SCI_SETWORDCHARS treats
+// the payload as a byte set, so non-ASCII bytes would be meaningless.
+- (void)applyWordCharsFromDefaults {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    ScintillaView *sci = _scintillaView;
+    NSString *defaultList = nppDefaultWordChars(sci);
+
+    if ([ud boolForKey:kPrefWordCharsUseDefault]) {
+        [sci message:SCI_SETWORDCHARS wParam:0 lParam:(sptr_t)defaultList.UTF8String];
+        return;
+    }
+
+    NSString *added = [ud stringForKey:kPrefWordCharsAdded] ?: @"";
+    if (added.length == 0) {
+        [sci message:SCI_SETWORDCHARS wParam:0 lParam:(sptr_t)defaultList.UTF8String];
+        return;
+    }
+
+    NSMutableString *combined = [defaultList mutableCopy];
+    for (NSUInteger i = 0; i < added.length; i++) {
+        unichar c = [added characterAtIndex:i];
+        if (c < 0x20 || c > 0x7E) continue;  // printable ASCII only
+        NSString *one = [NSString stringWithCharacters:&c length:1];
+        if ([defaultList rangeOfString:one].location == NSNotFound)
+            [combined appendString:one];
+    }
+    [sci message:SCI_SETWORDCHARS wParam:0 lParam:(sptr_t)combined.UTF8String];
 }
 
 - (void)_preferencesChanged:(NSNotification *)note {
@@ -2181,14 +2428,11 @@ static const int kGitGutterMargin   = 4;  // margin index for git gutter
 }
 
 - (void)toggleLineComment:(id)sender {
-    NSString *prefix = @"//";
-    NSDictionary *commentMap = @{
-        @"python":@"#", @"bash":@"#", @"ruby":@"#", @"perl":@"#",
-        @"r":@"#", @"yaml":@"#", @"makefile":@"#", @"cmake":@"#", @"toml":@"#",
-        @"sql":@"--", @"lua":@"--", @"haskell":@"--",
-    };
-    NSString *mapped = commentMap[_currentLanguage.lowercaseString];
-    if (mapped) prefix = mapped;
+    // Issue #85 — use the same XML-aware lookup as ^K / ^⇧K so languages
+    // whose commentLine is declared in langs.xml (Fortran, VB, Lisp, Ada,
+    // Erlang, PowerShell, Tcl, INI, LaTeX, PostScript, …) toggle with the
+    // correct prefix instead of always falling back to "//".
+    NSString *prefix = [self _lineCommentPrefix];
     if (!prefix.length) return;
 
     ScintillaView *sci = _scintillaView;
@@ -2694,8 +2938,17 @@ static const unsigned int kSCI_SetRectSelAnchor          = 2590;
 
 #pragma mark - Code Folding
 
-- (void)foldAll:(id)sender    { [_scintillaView message:SCI_FOLDALL wParam:SC_FOLDACTION_CONTRACT]; }
-- (void)unfoldAll:(id)sender  { [_scintillaView message:SCI_FOLDALL wParam:SC_FOLDACTION_EXPAND]; }
+// Issue #89 — Collapse All / Unfold All must include SC_FOLDACTION_CONTRACT_EVERY_LEVEL.
+// Without this flag, Scintilla's Editor::FoldAll only sets SetFoldExpanded(false)
+// on top-level (FoldLevel::Base) headers and skips past nested ranges via
+// `line = lineMaxSubord;`. Nested headers stay internally marked as expanded —
+// they're only hidden under their collapsed parent. When the user expands
+// the parent, the nested ones reappear expanded. Setting the
+// CONTRACT_EVERY_LEVEL flag drives the `else if (contractAll)` branch and
+// explicitly contracts every nested header. Mirrors Windows NPP's
+// ScintillaEditView::foldAll which OR's the same flag in for both directions.
+- (void)foldAll:(id)sender    { [_scintillaView message:SCI_FOLDALL wParam:(SC_FOLDACTION_CONTRACT | SC_FOLDACTION_CONTRACT_EVERY_LEVEL)]; }
+- (void)unfoldAll:(id)sender  { [_scintillaView message:SCI_FOLDALL wParam:(SC_FOLDACTION_EXPAND   | SC_FOLDACTION_CONTRACT_EVERY_LEVEL)]; }
 
 - (void)foldCurrentLevel:(id)sender {
     sptr_t line = [_scintillaView message:SCI_LINEFROMPOSITION
@@ -2903,6 +3156,10 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
 // Fold block highlighting (red ⊞/⊟ symbols and connecting lines for the enclosing block)
 // is handled automatically by SCI_MARKERENABLEHIGHLIGHT — no manual marker work needed.
 - (void)updateBraceHighlight {
+    // Performance pref — skip brace match for large files unless explicitly allowed.
+    if (_largeFileMode &&
+        ![[NSUserDefaults standardUserDefaults] boolForKey:kPrefLargeFileAllowBraceMatch]) return;
+
     ScintillaView *sci = _scintillaView;
     sptr_t caretPos = [sci message:SCI_GETCURRENTPOS];
     sptr_t docLen   = [sci message:SCI_GETLENGTH];
@@ -2952,6 +3209,11 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
 
     // Bail if smart highlighting is disabled
     if (![[NSUserDefaults standardUserDefaults] boolForKey:kPrefSmartHighlight]) return;
+
+    // Performance pref — skip smart highlight for large files unless explicitly allowed.
+    // Walking a multi-million-line buffer for selection-text matches dominates wall time.
+    if (_largeFileMode &&
+        ![[NSUserDefaults standardUserDefaults] boolForKey:kPrefLargeFileAllowSmartHilite]) return;
 
     sptr_t selStart = [sci message:SCI_GETSELECTIONSTART];
     sptr_t selEnd   = [sci message:SCI_GETSELECTIONEND];
@@ -3146,7 +3408,9 @@ static NSSet<NSString *> *_cLikeLanguages() {
     sptr_t endPos   = [sci message:SCI_GETLINEENDPOSITION wParam:(uptr_t)line];
     if (startPos >= endPos) return NO;
 
-    [sci message:SCI_SETSEARCHFLAGS wParam:SCFIND_REGEXP | SCFIND_POSIX];
+    // Use std::regex (CXX11REGEX) so the `|` alternations in `expr` actually
+    // work — Scintilla's POSIX RESearch treats `|` as a literal pipe.
+    [sci message:SCI_SETSEARCHFLAGS wParam:SCFIND_REGEXP | SCFIND_CXX11REGEX];
     [sci message:SCI_SETTARGETRANGE wParam:(uptr_t)startPos lParam:endPos];
 
     const char expr[] = "((else[ \t]+)?if|for|while)[ \t]*[(].*[)][ \t]*|else[ \t]*";
@@ -3321,7 +3585,9 @@ static NSSet<NSString *> *_cLikeLanguages() {
         sptr_t endPos   = [sci message:SCI_GETLINEENDPOSITION wParam:(uptr_t)prevLine];
 
         if (startPos < endPos) {
-            [sci message:SCI_SETSEARCHFLAGS wParam:SCFIND_REGEXP | SCFIND_POSIX];
+            // Use std::regex (CXX11REGEX) so the `(#|$)` alternation works —
+            // POSIX RESearch would match the parens/pipe literally.
+            [sci message:SCI_SETSEARCHFLAGS wParam:SCFIND_REGEXP | SCFIND_CXX11REGEX];
             [sci message:SCI_SETTARGETRANGE wParam:(uptr_t)startPos lParam:endPos];
 
             const char colonExpr[] = ":[ \t]*(#|$)";
@@ -3390,6 +3656,11 @@ static NSSet<NSString *> *_cLikeLanguages() {
 }
 
 - (void)updateAutoComplete {
+    // Performance pref — skip word-completion suggestions for large files unless allowed.
+    // The autocomplete word-list build walks the whole document.
+    if (_largeFileMode &&
+        ![[NSUserDefaults standardUserDefaults] boolForKey:kPrefLargeFileAllowAutoComplete]) return;
+
     // Honour configurable minimum-character threshold (default 1, matching NPP Windows)
     NSInteger minChars = [[NSUserDefaults standardUserDefaults]
                           integerForKey:kPrefAutoCompleteMinChars];
@@ -3528,9 +3799,147 @@ static NSSet<NSString *> *_cLikeLanguages() {
                 }
             }
             break;
+        case SCN_DOUBLECLICK:
+            [self _handleDelimiterDoubleClick:notification];
+            break;
+        case SCN_ZOOM:
+            // Re-fit the line-number margin to the new zoom level so digits
+            // don't get clipped at higher zoom. Scintilla raises SCN_ZOOM
+            // from inside SCI_SETZOOM / SCI_ZOOMIN / SCI_ZOOMOUT, covering
+            // every zoom path (menu, Ctrl+scroll, plugin SCI_SETZOOM).
+            [self recomputeLineNumberMargin];
+            break;
         default:
             break;
     }
+}
+
+// ⌘+double-click selection between configured Open / Close delimiters (issue
+// #42, "Delimiter selection settings"). Ported from Windows NppNotification.cpp
+// lines 218-369 with the following macOS adaptations:
+//   • Modifier check uses SCMOD_CTRL which ScintillaCocoa already maps from
+//     macOS Cmd (see ScintillaCocoa.mm TranslateModifierFlags). Plain
+//     double-click falls through and Scintilla performs native word select.
+//   • Entire-document mode uses SCI_GETCHARACTERPOINTER (zero-copy, matches
+//     Phase 2.5 save path). For multi-GB files this is essential — we cannot
+//     afford to SCI_GETTEXT a 2.78 GB buffer like the Windows code does.
+//     The pointer is invalidated by edits; we hold it only for the
+//     synchronous scan on the main thread, so no concurrency hazard.
+//   • Single-line mode allocates a per-line copy via SCI_GETLINE; bounded
+//     by line length, fine for typical source code.
+- (void)_handleDelimiterDoubleClick:(SCNotification *)notification {
+    if (notification->modifiers != SCMOD_CTRL) return;  // plain or other-mod double-click → Scintilla handles
+
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NSString *openS  = [ud stringForKey:kPrefDelimOpen]  ?: @"(";
+    NSString *closeS = [ud stringForKey:kPrefDelimClose] ?: @")";
+    if (openS.length == 0 || closeS.length == 0) return;
+
+    // Delimiter chars must be single-byte (ASCII). The prefs UI already clamps
+    // to one Unicode char, but a non-ASCII unichar would be multi-byte UTF-8 —
+    // matching it byte-by-byte against the doc would be wrong. Reject.
+    unichar openU  = [openS  characterAtIndex:0];
+    unichar closeU = [closeS characterAtIndex:0];
+    if (openU > 0x7E || closeU > 0x7E) return;
+    const char openCh  = (char)openU;
+    const char closeCh = (char)closeU;
+
+    BOOL entireDoc = [ud boolForKey:kPrefDelimEntireDoc];
+    ScintillaView *sci = _scintillaView;
+
+    // Click position. notification->position is -1 for empty-line click —
+    // fall back to current caret position (matches Windows lines 229-234).
+    sptr_t clickAbs = notification->position;
+    if (clickAbs < 0) clickAbs = [sci message:SCI_GETCURRENTPOS];
+    if (clickAbs < 0) return;
+
+    const char *buf = NULL;
+    sptr_t bufLen = 0;
+    sptr_t lineStart = 0;     // absolute byte offset of buf[0] in the document
+    sptr_t clickRel  = 0;     // click position relative to buf[0]
+    NSData *lineCopy = nil;   // retains the malloc'd line buffer in single-line mode
+
+    if (entireDoc) {
+        bufLen = [sci message:SCI_GETLENGTH];
+        if (bufLen <= 0) return;
+        buf = (const char *)[sci message:SCI_GETCHARACTERPOINTER];
+        if (!buf) return;
+        clickRel = clickAbs;
+    } else {
+        sptr_t line = [sci message:SCI_LINEFROMPOSITION wParam:(uptr_t)clickAbs];
+        sptr_t lineLen = [sci message:SCI_LINELENGTH wParam:(uptr_t)line];
+        if (lineLen <= 0) return;
+        char *tmp = (char *)malloc((size_t)lineLen + 1);
+        if (!tmp) return;
+        [sci message:SCI_GETLINE wParam:(uptr_t)line lParam:(sptr_t)tmp];
+        tmp[lineLen] = '\0';
+        lineCopy = [NSData dataWithBytesNoCopy:tmp length:(NSUInteger)lineLen freeWhenDone:YES];
+        buf = (const char *)lineCopy.bytes;
+        bufLen = lineLen;
+        lineStart = [sci message:SCI_POSITIONFROMLINE wParam:(uptr_t)line];
+        clickRel = clickAbs - lineStart;
+    }
+
+    if (clickRel < 0 || clickRel >= bufLen) return;
+
+    sptr_t leftmost = -1;
+    sptr_t rightmost = -1;
+
+    if (openCh == closeCh) {
+        // Same delimiter on both sides (e.g. "..."). Scan outward from the
+        // click; if the delimiter is " also respect backslash escapes.
+        for (sptr_t i = clickRel; i >= 0; --i) {
+            if (buf[i] == openCh) {
+                if (openCh == '"' && i > 0 && buf[i - 1] == '\\') continue;
+                leftmost = i;
+                break;
+            }
+        }
+        if (leftmost < 0) return;
+        for (sptr_t i = clickRel; i < bufLen; ++i) {
+            if (buf[i] == closeCh) {
+                if (closeCh == '"' && i > 0 && buf[i - 1] == '\\') continue;
+                rightmost = i;
+                break;
+            }
+        }
+    } else {
+        // Distinct pair like (). Stack-based matched-pair scan; pick the
+        // innermost matched pair that brackets the click position. Uses
+        // std::vector to avoid NSNumber boxing in deeply-nested files.
+        std::vector<sptr_t> opens;
+        opens.reserve(64);
+        for (sptr_t i = 0; i < bufLen; ++i) {
+            if (buf[i] == openCh) {
+                opens.push_back(i);
+            } else if (buf[i] == closeCh && !opens.empty()) {
+                sptr_t opener = opens.back();
+                opens.pop_back();
+                if (opener <= clickRel && i >= clickRel &&
+                    (leftmost < 0 || opener > leftmost)) {
+                    leftmost  = opener;
+                    rightmost = i;
+                }
+            }
+        }
+    }
+
+    if (leftmost < 0 || rightmost < 0) return;
+
+    // Selection covers content *between* the delimiters, exclusive of them
+    // (matches Windows lines 358-366).
+    //
+    // CRITICAL: use SCI_SETSEL, not SCI_SETANCHOR + SCI_SETCURRENTPOS. With
+    // Ctrl held (which on macOS = ⌘ after ScintillaCocoa's modifier swap),
+    // Scintilla's Editor.cxx:4806 SKIPS the SetEmptySelection call, so the
+    // word at the click position is ADDED as a second selection on top of
+    // whatever was previously selected. SCI_SETANCHOR/SCI_SETCURRENTPOS only
+    // mutate the main selection without clearing the others — Cmd+C would
+    // then copy both and concatenate with newlines (selN=2, "X\nhello world").
+    // SCI_SETSEL clears any multi-selection and sets a single stream range.
+    sptr_t anchor  = lineStart + leftmost + 1;
+    sptr_t current = lineStart + rightmost;
+    [sci message:SCI_SETSEL wParam:(uptr_t)anchor lParam:(sptr_t)current];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4565,6 +4974,14 @@ static const unsigned int kSCI_GetBidirectional = 2708;
 #pragma mark - Auto-Completion Actions
 
 - (void)triggerWordCompletion:(id)sender {
+    // Performance pref — manual completion still respects the large-file gate.
+    // Window scan is bounded (500 KB ± caret) so it's not catastrophic, but the
+    // user has explicitly opted out of completion for huge files.
+    if (_largeFileMode &&
+        ![[NSUserDefaults standardUserDefaults] boolForKey:kPrefLargeFileAllowAutoComplete]) {
+        NSBeep();
+        return;
+    }
     // Manual Ctrl+Enter: force word completion even when auto-complete is off; min prefix = 1
     [self _showWordCompletionWithMinPrefix:1 beepOnEmpty:YES];
 }

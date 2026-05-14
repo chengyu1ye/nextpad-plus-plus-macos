@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <!--
-    Hawaiian (ʻŌlelo Hawaiʻi) language file for Notepad++ macOS
+    Hawaiian (ʻŌlelo Hawaiʻi) language file for Nextpad++ macOS
     Based on English template - community translations welcome
     Created: 2026-04-04
 -->
@@ -41,7 +41,7 @@
 					<Item subMenuId="edit-onSelection" name="Ma ke Koho"/>
 					<Item subMenuId="edit-multiSelectALL" name="E koho nui i nā mea a pau"/>
 					<Item subMenuId="edit-multiSelectNext" name="Koho-nui Aʻe"/>
-					<Item subMenuId="edit-readonlyInNotepad++" name="Heluhelu-wale ma Notepad++"/>
+					<Item subMenuId="edit-readonlyInNextpad++" name="Heluhelu-wale ma Nextpad++"/>
 					<Item subMenuId="search-changeHistory" name="Hoʻololi i ka mōʻaukala"/>
 					<Item subMenuId="search-markAll" name="Kaila Nā Hana a pau o ka Token"/>
 					<Item subMenuId="search-markOne" name="Kaila Hookahi Token"/>
@@ -367,17 +367,17 @@
 					<Item id="46016" name="ʻAʻohe (He kikokikona maʻamau)"/>
 					<Item id="46250" name="E wehewehe i kāu ʻōlelo..."/>
 					<Item id="46300" name="Wehe i ka waihona ʻōlelo i hoʻoholo ʻia e ka mea hoʻohana..."/>
-					<Item id="46301" name="Notepad++ Mea Hoʻokaʻina ʻŌlelo Hoʻohālikelike"/>
+					<Item id="46301" name="Nextpad++ Mea Hoʻokaʻina ʻŌlelo Hoʻohālikelike"/>
 					<Item id="46180" name="Hoʻoholo ʻia ka mea hoʻohana"/>
-					<Item id="47000" name="E pili ana i ka Notepad++"/>
+					<Item id="47000" name="E pili ana i ka Nextpad++"/>
 					<Item id="47010" name="Nā ʻōlelo hoʻopaʻapaʻa laina kauoha..."/>
-					<Item id="47001" name="Notepad++ Home"/>
-					<Item id="47002" name="ʻAoʻao papahana Notepad++"/>
-					<Item id="47003" name="Notepad++ Palapala Hoʻohana Online"/>
-					<Item id="47004" name="Notepad++ Community (Forum)"/>
+					<Item id="47001" name="Nextpad++ Home"/>
+					<Item id="47002" name="ʻAoʻao papahana Nextpad++"/>
+					<Item id="47003" name="Palapala Hoʻohana Online"/>
+					<Item id="47004" name="Nextpad++ Community (Forum)"/>
 					<Item id="47012" name="ʻIke hoʻopololei..."/>
 					<Item id="47005" name="Loaʻa i nā mea hoʻohui hou aʻe"/>
-					<Item id="47006" name="Hoʻohou i ka Notepad++"/>
+					<Item id="47006" name="Hoʻohou i ka Nextpad++"/>
 					<Item id="47009" name="E hoʻonoho i ka mea hoʻohou i ka Proxy..."/>
 					<Item id="48005" name="Hoʻokomo i (mau) plugin..."/>
 					<Item id="48006" name="Kaila kumu(mau)..."/>
@@ -446,7 +446,7 @@
 				<Item CMDID="41016" name="Neʻe i ka Recycle Bin"/>
 				<Item CMDID="41014" name="Hoʻouka hou"/>
 				<Item CMDID="41010" name="Paʻi..."/>
-				<Item CMDID="42028" name="Heluhelu-wale ma Notepad++"/>
+				<Item CMDID="42028" name="Heluhelu-wale ma Nextpad++"/>
 				<Item CMDID="42033" name="ʻAno heluhelu-wale ma Windows"/>
 				<Item CMDID="2" name="E kope i ka papa paʻi"/>
 				<Item CMDID="42029" name="E kope i ke ala waihona piha"/>
@@ -1128,7 +1128,7 @@
 				</DefaultDir>
 
 				<FileAssoc title="Hui waihona">
-					<Item id="4008" name="E ʻoluʻolu e haʻalele i ka Notepad++ a hoʻomaka hou i ka Notepad++ ma ke ʻano Administrator e hoʻohana i kēia hiʻohiʻona."/>
+					<Item id="4008" name="E ʻoluʻolu e haʻalele i ka Nextpad++ a hoʻomaka hou i ka Nextpad++ ma ke ʻano Administrator e hoʻohana i kēia hiʻohiʻona."/>
 					<Item id="4009" name="Nā mea hoʻonui i kākoʻo ʻia:"/>
 					<Item id="4010" name="Nā mea hoʻonui i kākau inoa ʻia:"/>
 				</FileAssoc>
@@ -1213,7 +1213,7 @@
 				</Print>
 
 				<Searching title="Ke huli nei">
-					<Item id="6902" name="E hoʻohana i ke kikokikona monospaced i ka ʻōlelo ʻimi (Pono e hoʻomaka hou i ka Notepad++)"/>
+					<Item id="6902" name="E hoʻohana i ke kikokikona monospaced i ka ʻōlelo ʻimi (Pono e hoʻomaka hou i ka Nextpad++)"/>
 					<Item id="6903" name="E wehe ʻia ke kamaʻilio ʻimi ma hope o ka huli ʻana i puka i ka puka makani hopena"/>
 					<Item id="6904" name="E hōʻoia e hoʻololi i nā mea a pau i nā palapala i wehe ʻia"/>
 					<Item id="6905" name="Hoʻololi: Mai neʻe i kēia hanana aʻe"/>
@@ -1281,7 +1281,7 @@
 					<Item id="6152" name="E wehe i ka hālāwai ma kahi laʻana hou (a mālama ʻakomi i ka hālāwai ma ka puka ʻana)"/>
 					<Item id="6153" name="I nā manawa a pau ma ke ʻano hoʻohālikelike nui"/>
 					<Item id="6154" name="Paʻamau (mono-like)"/>
-					<Item id="6155" name="* Pono ka hoʻololi ʻana o kēia hoʻonohonoho e hoʻomaka hou i ka Notepad++"/>
+					<Item id="6155" name="* Pono ka hoʻololi ʻana o kēia hoʻonohonoho e hoʻomaka hou i ka Nextpad++"/>
 					<Item id="6171" name="Hoʻopilikino i ka hoʻokomo ʻana i ka manawa lā"/>
 					<Item id="6175" name="E hoʻohuli i ke kauoha manawa lā paʻamau (nā ʻano pōkole lōʻihi)"/>
 					<Item id="6172" name="Hōʻano pilikino:"/>
@@ -1364,8 +1364,8 @@
 					</ComboBox>
 					<ComboBox id="6364">
 						<Element name="Hoʻopau"/>
-						<Element name="E ho'ā i ka Notepad++ hoʻomaka"/>
-						<Element name="E ho'ā ma ka Notepad++ puka"/>
+						<Element name="E ho'ā i ka Nextpad++ hoʻomaka"/>
+						<Element name="E ho'ā ma ka Nextpad++ puka"/>
 					</ComboBox>
 					<Item id="6308" name="pae ʻōnaehana"/>
 					<Item id="6363" name="ʻano hoʻohālike"/>
@@ -1564,7 +1564,7 @@ Hiki iā ʻoe ke hoʻāla hou i kēia kamaʻilio ma nā Koho ma hope."/>
 				<Item id="90104" name="Hoʻouka hou mai Disk"/>
 				<Item id="90105" name="Hoʻololi i ka ʻenekini huli"/>
 				<Item id="90106" name="Holo hewa"/>
-				<Item id="90107" name="Notepad++ Hoʻouka Manawa"/>
+				<Item id="90107" name="Nextpad++ Hoʻouka Manawa"/>
 				<Item id="90108" name="ʻAʻole hiki ke nānā i nā mea hou"/>
 				<Item id="90109" name="Aia ʻoe i ka lā"/>
 				<Item id="90110" name="Hoʻoiho"/>
@@ -1650,7 +1650,7 @@ Hiki iā ʻoe ke hoʻāla hou i kēia kamaʻilio ma nā Koho ma hope."/>
 				<Item id="90189" name="Windows (CRLF)"/>
 				<Item id="90190" name="Mac (CR)"/>
 				<Item id="90191" name="Waihona papa inoa plugin"/>
-				<Item id="90192" name="E koho i kahi waihona XML kumuhana Notepad++ e hoʻohana"/>
+				<Item id="90192" name="E koho i kahi waihona XML kumuhana Nextpad++ e hoʻohana"/>
 				<Item id="90193" name="Hana hou\u2026"/>
 				<Item id="90194" name="Mālama i\u2026"/>
 				<Item id="90195" name="ʻŌlelo mea hoʻohana:"/>
@@ -1663,7 +1663,7 @@ Hiki iā ʻoe ke hoʻāla hou i kēia kamaʻilio ma nā Koho ma hope."/>
 				<Item id="90202" name="Manaʻo ʻole"/>
 				<Item id="90203" name="He 0-255 ka nui o ka waiwai a he &lt;= pau ka hoʻomaka."/>
 				<Item id="90204" name="contextMenu.xml ʻAʻole i loaʻa"/>
-				<Item id="90205" name="E hoʻomaka hou i ka Notepad++ no ka hoʻoulu hou ʻana i ka contextMenu.xml paʻamau."/>
+				<Item id="90205" name="E hoʻomaka hou i ka Nextpad++ no ka hoʻoulu hou ʻana i ka contextMenu.xml paʻamau."/>
 				<Item id="90206" name="Loaʻa nā loli i mālama ʻole ʻia ka faila.ʻO ka hoʻouka hou ʻana me ka hoʻopili hou e hoʻolei iā lākou.E hoʻomau?"/>
 				<Item id="90207" name="ʻAʻohe pane mai ke kikowaena."/>
 				<Item id="90208" name="Ua hoʻihoʻi ke kikowaena"/>
@@ -1686,8 +1686,8 @@ Hiki iā ʻoe ke hoʻāla hou i kēia kamaʻilio ma nā Koho ma hope."/>
 		</Dialog>
 		<MessageBox>
 			<!-- $INT_REPLACE$ and $STR_REPLACE$ are place holders, don't translate these place holders. -->
-			<ContextMenuXmlEditWarning title="Hoʻoponopono contextMenu" message="ʻO ka hoʻoponopono ʻana i ka contextMenu.xml hiki iā ʻoe ke hoʻololi i kāu Notepad++ popup context menu.
-Pono ʻoe e hoʻomaka hou i kāu Notepad++ e hana ma hope o ka hoʻololi ʻana i ka contextMenu.xml."/>
+			<ContextMenuXmlEditWarning title="Hoʻoponopono contextMenu" message="ʻO ka hoʻoponopono ʻana i ka contextMenu.xml hiki iā ʻoe ke hoʻololi i kāu Nextpad++ popup context menu.
+Pono ʻoe e hoʻomaka hou i kāu Nextpad++ e hana ma hope o ka hoʻololi ʻana i ka contextMenu.xml."/>
 			<SaveCurrentModifWarning title="E mālama i ka hoʻololi o kēia manawa" message="Pono ʻoe e mālama i ka hoʻololi o kēia manawa.
 ʻAʻole hiki ke hoʻopau ʻia nā hoʻololi a pau i mālama ʻia.
 
@@ -1696,16 +1696,16 @@ E hoʻomau?"/><!-- HowToReproduce: when you openned file is modified but unsaved
 ʻAʻole hiki ke hoʻopau ʻia nā hoʻololi a pau i mālama ʻia.
 
 E hoʻomau?"/><!-- HowToReproduce: when you openned file is modified and saved, then you are changing file encoding. -->
-			<CannotMoveDoc title="E neʻe i kahi Notepad++ hou" message="Hoʻololi ʻia ka palapala, mālama a hoʻāʻo hou."/><!-- HowToReproduce: From your Notepad++ drag & drop a clean (not dirty) file to outside of Notepad++, another instance of Notepad++ will be created. Then from your first Notepad++ drag & drop an unsaved file to the new instance. -->
-			<DocReloadWarning title="Hoʻouka hou" message="Makemake ʻoe e hoʻouka hou i ka faila o kēia manawa a nalowale nā ​​loli i hana ʻia ma Notepad++?"/>
+			<CannotMoveDoc title="E neʻe i kahi Nextpad++ hou" message="Hoʻololi ʻia ka palapala, mālama a hoʻāʻo hou."/><!-- HowToReproduce: From your Nextpad++ drag & drop a clean (not dirty) file to outside of Nextpad++, another instance of Nextpad++ will be created. Then from your first Nextpad++ drag & drop an unsaved file to the new instance. -->
+			<DocReloadWarning title="Hoʻouka hou" message="Makemake ʻoe e hoʻouka hou i ka faila o kēia manawa a nalowale nā ​​loli i hana ʻia ma Nextpad++?"/>
 			<FileLockedWarning title="ʻAʻole hiki ke mālama" message="E ʻoluʻolu e nānā inā wehe ʻia kēia faila ma kahi papahana ʻē aʻe"/>
-			<FileAlreadyOpenedInNpp title="" message="Ua wehe ʻia ka faila ma Notepad++."/><!-- HowToReproduce: Open a new document and open a file "c:/tmp/foo", save this new document by choosing "c:/tmp/foo" as file to save, reply the override popup "yes", then this message appears. -->
+			<FileAlreadyOpenedInNpp title="" message="Ua wehe ʻia ka faila ma Nextpad++."/><!-- HowToReproduce: Open a new document and open a file "c:/tmp/foo", save this new document by choosing "c:/tmp/foo" as file to save, reply the override popup "yes", then this message appears. -->
 			<RenameTabTemporaryNameAlreadyInUse title="Ua hāʻule ka inoa" message="Hoʻohana ʻia ka inoa i ʻōlelo ʻia ma kahi ʻaoʻao ʻē aʻe."/><!-- HowToReproduce: Rename the tab of an untitled document and provide a name that is the same as an already-existing tab of an untitled document. -->
 			<RenameTabTemporaryNameIsEmpty title="Ua hāʻule ka inoa" message="ʻAʻole hiki ke hoʻokaʻawale ʻia ka inoa i ʻōlelo ʻia, a ʻaʻole hiki ke loaʻa i kahi (mau) a i ʻole TAB (mau) wale nō."/><!-- HowToReproduce: Rename the tab of an untitled document and provide an empty string or only some white speces. -->
 			<DeleteFileFailed title="Holoi i ka waihona" message="Holoi ʻole ka faila"/><!-- HowToReproduce: this message prevents from system failure. It's hard to reproduce. -->
 
 			<NbFileToOpenImportantWarning title="Nui loa ka nui o nā faila e wehe ai" message="$INT_REPLACE$ files are about to be opened.
-Are you sure you want to open them?"/><!-- HowToReproduce: Check "Open all files of folder instead of launching Folder as Workspace on folder dropping" in "Default Directory" of Preferences dialog, then drop a folder which contains more then 200 files into Notepad++. -->
+Are you sure you want to open them?"/><!-- HowToReproduce: Check "Open all files of folder instead of launching Folder as Workspace on folder dropping" in "Default Directory" of Preferences dialog, then drop a folder which contains more then 200 files into Nextpad++. -->
 			<SettingsOnCloudError title="Nā hoʻonohonoho ma Cloud" message="Me he mea lā ua kau ʻia ke ala o ka hoʻonohonoho ʻana ma ke ao ma kahi māka heluhelu wale nō,
 a i ʻole ma kahi waihona pono pono no ke kākau ʻana.
 Hoʻopau ʻia kāu mau hoʻonohonoho ma ke ao.E ʻoluʻolu e hoʻihoʻi i kahi waiwai pili ma o ke kamaʻilio Preference."/>
@@ -1716,7 +1716,7 @@ Pono ʻoe e ʻae i ka &quot;Wehe i nā faila āpau o ka waihona ma kahi o ka ho�
 			<SortingError title="Hapa ka helu ana" message="ʻAʻole hiki ke hana i ka hoʻokaʻina helu ma muli o ka laina $INT_REPLACE$."/><!-- HowToReproduce: this message prevents from system failure. It's hard to reproduce. -->
 			<SortLocaleMultiple title="ʻAʻole i hoʻokō ʻia" message="ʻAʻole kākoʻo ʻia ka hoʻokaʻawale ʻana i nā koho he nui."/><!-- HowToReproduce: Make a multiple selection and choose Edit | Line Operations | Sort Lines In Locale Order. -->
 			<SortLocaleUnknown title="ʻAʻole hiki ke ʻano" message="ʻAʻole hiki ke hoʻoholo ʻia ke kumu i hāʻule ʻole ai ke ʻano."/><!-- HowToReproduce: This condition is theoretical; it is unknown what could cause it. -->
-			<SortLocaleExcept title="ʻAʻole hiki ke ʻano" message="$STR_REPLACE$"/><!-- HowToReproduce: Open a large file, e.g. 500MB / 90k lines, in 32-bit Notepad++ and choose Edit | Line Operations | Sort Lines In Locale Order. -->
+			<SortLocaleExcept title="ʻAʻole hiki ke ʻano" message="$STR_REPLACE$"/><!-- HowToReproduce: Open a large file, e.g. 500MB / 90k lines, in 32-bit Nextpad++ and choose Edit | Line Operations | Sort Lines In Locale Order. -->
 			<ColumnModeTip title="Manaʻo Kūlana Kūlana" message="Aia 3 ala e hoʻololi ai i ke ʻano koho kolamu:
 
 1. (Keyboard and Mouse) E paʻa i ka Alt i ka wā e kaomi hema ana
@@ -1744,14 +1744,14 @@ Makemake ʻoe e hoʻouka hou?"/>
 			<DoReloadOrNotAndLooseChange title="Hoʻouka hou" message="&quot;$STR_REPLACE$&quot;
 
 Ua hoʻololi ʻia kēia faila e kekahi papahana ʻē aʻe.
-Makemake ʻoe e hoʻouka hou a nalowale nā ​​loli i hana ʻia ma Notepad++?"/>
+Makemake ʻoe e hoʻouka hou a nalowale nā ​​loli i hana ʻia ma Nextpad++?"/>
 			<PrehistoricSystemDetected title="ʻIke ʻia ka ʻōnaehana prehistoric" message="Me he mea lā ke hoʻohana mau nei ʻoe i kahi ʻōnaehana prehistoric.Hana wale kēia hiʻohiʻona ma kahi ʻōnaehana hou, e kala mai."/><!-- HowToReproduce: Launch "Document Map" under Windows XP. -->
-			<XpUpdaterProblem title="Notepad++ Updater" message="ʻAʻole kūpono ka Notepad++ updater me XP ma muli o ka papa palekana obsolete ma lalo o XP.
-Makemake ʻoe e hele i ka ʻaoʻao Notepad++ e hoʻoiho i ka mana hou?"/><!-- HowToReproduce: Run menu "? -> Update Notepad++" under Windows XP. -->
-			<GUpProxyConfNeedAdminMode title="Hoʻonohonoho Proxy" message="E ʻoluʻolu e hoʻokuʻu hou i ka Notepad++ ma ke ʻano Admin e hoʻonohonoho i ka proxy."/>
+			<XpUpdaterProblem title="Nextpad++ Updater" message="ʻAʻole kūpono ka Nextpad++ updater me XP ma muli o ka papa palekana obsolete ma lalo o XP.
+Makemake ʻoe e hele i ka ʻaoʻao Nextpad++ e hoʻoiho i ka mana hou?"/><!-- HowToReproduce: Run menu "? -> Update Nextpad++" under Windows XP. -->
+			<GUpProxyConfNeedAdminMode title="Hoʻonohonoho Proxy" message="E ʻoluʻolu e hoʻokuʻu hou i ka Nextpad++ ma ke ʻano Admin e hoʻonohonoho i ka proxy."/>
 			<DocTooDirtyToMonitor title="Pilikia ka nānā ʻana" message="He lepo ka palapala.E ʻoluʻolu e mālama i ka hoʻololi ma mua o ka nānā ʻana."/>
 			<DocNoExistToMonitor title="Pilikia ka nānā ʻana" message="Pono e mālama ʻia ka faila."/>
-			<FileTooBigToOpen title="Pilikia ka nui o ka faila" message="Nui loa ka faila ʻaʻole hiki ke wehe ʻia e Notepad++"/><!-- HowToReproduce: Try to open a 4GB file (it's not easy to reproduce, it depends on your system). -->
+			<FileTooBigToOpen title="Pilikia ka nui o ka faila" message="Nui loa ka faila ʻaʻole hiki ke wehe ʻia e Nextpad++"/><!-- HowToReproduce: Try to open a 4GB file (it's not easy to reproduce, it depends on your system). -->
 			<FileLoadingException title="Helu helu ʻokoʻa: $STR_REPLACE$" message="Ua hewa i ka hoʻouka ʻana i ka faila!"/>
 			<WantToOpenHugeFile title="Ke wehe ʻana i ka ʻōlelo aʻo faila nui" message="ʻO ka wehe ʻana i kahi faila nui o 2GB+ hiki ke lawe i kekahi mau minuke.
 Makemake ʻoe e wehe?"/>
@@ -1765,8 +1765,8 @@ Makemake ʻoe e wehe?"/>
 Makemake ʻoe e mālama i ka faila o kēia manawa?"/><!-- HowToReproduce: this message prevents from system failure. It's hard to reproduce. -->
 			<LoadStylersFailed title="ʻAʻole hiki ke hoʻouka i nā stylers.xml" message="ʻAʻole hiki ke hoʻouka &quot;$STR_REPLACE$&quot;!"/>
 			<LoadLangsFailed title="Mea hoʻonohonoho" message="ʻAʻole hiki ke hoʻouka i ka langs.xml!
-Makemake ʻoe e hoʻihoʻi i kāu langs.xml?"/><!-- HowToReproduce: Close Notepad++. Use another editor to remove all content of "langs.xml" (0 length) then save it. Open Notepad++. -->
-			<LoadLangsFailedFinal title="Mea hoʻonohonoho" message="ʻAʻole hiki ke hoʻouka i ka langs.xml!"/><!-- HowToReproduce: Close Notepad++. Use another editor to make "langs.xml" an invalid xml file then save it. Open Notepad++. -->
+Makemake ʻoe e hoʻihoʻi i kāu langs.xml?"/><!-- HowToReproduce: Close Nextpad++. Use another editor to remove all content of "langs.xml" (0 length) then save it. Open Nextpad++. -->
+			<LoadLangsFailedFinal title="Mea hoʻonohonoho" message="ʻAʻole hiki ke hoʻouka i ka langs.xml!"/><!-- HowToReproduce: Close Nextpad++. Use another editor to make "langs.xml" an invalid xml file then save it. Open Nextpad++. -->
 			<FolderAsWorspaceSubfolderExists title="Hoʻohui ʻia ka waihona ma ke ʻano he Workspace i ka pilikia waihona" message="Aia kekahi waihona waihona o ka waihona āu e makemake ai e hoʻohui.
 E ʻoluʻolu e wehe i kona kumu mai ka pā ma mua o kou hoʻohui ʻana i ka waihona &quot;$STR_REPLACE$&quot;."/><!-- HowToReproduce: Add a folder like "c:\temp\aFolder\" into "Folder as Workspace" panel, then try to add "c:\temp\". -->
 
@@ -1794,28 +1794,28 @@ e hāʻawi i kekahi."/>
 			<SCMapperDoDeleteOrNot title="He ʻoiaʻiʻo kēnā?" message="Makemake ʻoe e holoi i kēia pōkole?"/>
 			<FindCharRangeValueError title="Pilikia Waiwai Lahui" message="Pono ʻoe e kikokiko ma waena o 0 a 255."/> <!-- HowToReproduce: Search menu, then Find characters in range, select Custom range, enter 999 in either edit box, press Find. -->
 			<OpenInAdminMode title="ʻAʻole hiki ke mālama" message="ʻAʻole hiki ke mālama ʻia ka faila a hiki ke pale ʻia.
-Makemake ʻoe e hoʻomaka i ka Notepad++ ma ke ʻano Administrator?"/>
+Makemake ʻoe e hoʻomaka i ka Nextpad++ ma ke ʻano Administrator?"/>
 			<OpenInAdminModeWithoutCloseCurrent title="ʻAʻole hiki ke mālama" message="ʻAʻole hiki ke mālama ʻia ka faila a hiki ke pale ʻia.
-Makemake ʻoe e hoʻomaka i ka Notepad++ ma ke ʻano Administrator?"/>
-			<OpenInAdminModeFailed title="ʻAʻole i hāʻawi ʻia ka wehe ʻana ma ke ʻano Administrator" message="ʻAʻole hiki ke wehe ʻia ka Notepad++ ma ke ʻano Administrator."/><!-- HowToReproduce: When you have no Admin privilege and you try to save a modified file in a protected location (for example: any file in sub-folder of "C:\Program Files\". This message will appear after replying "Yes" to "Open in Admin mode" dialog. -->
+Makemake ʻoe e hoʻomaka i ka Nextpad++ ma ke ʻano Administrator?"/>
+			<OpenInAdminModeFailed title="ʻAʻole i hāʻawi ʻia ka wehe ʻana ma ke ʻano Administrator" message="ʻAʻole hiki ke wehe ʻia ka Nextpad++ ma ke ʻano Administrator."/><!-- HowToReproduce: When you have no Admin privilege and you try to save a modified file in a protected location (for example: any file in sub-folder of "C:\Program Files\". This message will appear after replying "Yes" to "Open in Admin mode" dialog. -->
 			<ViewInBrowser title="Nānā i ka faila i kēia manawa ma ka polokalamu kele" message="ʻAʻole hiki ke loaʻa ka noi ma kāu ʻōnaehana."/>
-			<ExitToUpdatePlugins title="Ua kokoke e puka ka Notepad++" message="Inā kaomi ʻoe iā YES, e haʻalele ʻoe i ka Notepad++ e hoʻomau i nā hana.
-E hoʻomaka hou ka Notepad++ ma hope o ka pau ʻana o nā hana āpau.
+			<ExitToUpdatePlugins title="Ua kokoke e puka ka Nextpad++" message="Inā kaomi ʻoe iā YES, e haʻalele ʻoe i ka Nextpad++ e hoʻomau i nā hana.
+E hoʻomaka hou ka Nextpad++ ma hope o ka pau ʻana o nā hana āpau.
 E hoʻomau?"/>
-			<NeedToRestartToLoadPlugins title="Pono e hoʻokuʻu hou ʻia ka Notepad++" message="Pono ʻoe e hoʻomaka hou i ka Notepad++ e hoʻouka i nā plugins āu i kau ai."/><!-- HowToReproduce: Import a plugin via menu "Settings->Import->Import Plugin(s)...". -->
-			<ChangeHistoryEnabledWarning title="Pono e hoʻokuʻu hou ʻia ka Notepad++" message="Pono ʻoe e hoʻomaka hou i ka Notepad++ e hiki ai i ka Change History."/><!-- HowToReproduce: uncheck "Display Change History" via Preferences dialog "Marges/Border/Edge. -->
-			<WindowsSessionExit title="Notepad++ - puka puka Windows session" message="E hoʻopau ʻia ke kau Windows akā loaʻa iā ʻoe kekahi ʻikepili i mālama ʻole ʻia.Makemake ʻoe e haʻalele i ka Notepad++ i kēia manawa?"/>
+			<NeedToRestartToLoadPlugins title="Pono e hoʻokuʻu hou ʻia ka Nextpad++" message="Pono ʻoe e hoʻomaka hou i ka Nextpad++ e hoʻouka i nā plugins āu i kau ai."/><!-- HowToReproduce: Import a plugin via menu "Settings->Import->Import Plugin(s)...". -->
+			<ChangeHistoryEnabledWarning title="Pono e hoʻokuʻu hou ʻia ka Nextpad++" message="Pono ʻoe e hoʻomaka hou i ka Nextpad++ e hiki ai i ka Change History."/><!-- HowToReproduce: uncheck "Display Change History" via Preferences dialog "Marges/Border/Edge. -->
+			<WindowsSessionExit title="Nextpad++ - puka puka Windows session" message="E hoʻopau ʻia ke kau Windows akā loaʻa iā ʻoe kekahi ʻikepili i mālama ʻole ʻia.Makemake ʻoe e haʻalele i ka Nextpad++ i kēia manawa?"/>
 			<LanguageMenuCompactWarning title="Papa kuhikuhi ʻōlelo paʻakikī" message="E hoʻololi ʻia kēia koho i ka hoʻomaka hou ʻana."/><!-- HowToReproduce: toggle "Make language menu compact" via Preferences dialog "Language/Language Menu. -->
 			<SwitchUnsavedThemeWarning title="$STR_REPLACE$" message="E hoʻolei ʻia nā loli i mālama ʻole ʻia!
 Makemake ʻoe e mālama i kāu mau hoʻololi ma mua o ka hoʻololi ʻana i nā kumumanaʻo?"/><!-- HowToReproduce: In the Style Configurator dialog change some theme and switch to other theme without saving. -->
-			<MacroAndRunCmdlWarning title="Macro a me Run Command Compatibility" message="ʻAʻole kūpono paha kāu mau kauoha Macro a Run i mālama ʻia ma Notepad++ v.8.5.2 (a ʻoi aku paha) me ka mana o Notepad++ o kēia manawa.
+			<MacroAndRunCmdlWarning title="Macro a me Run Command Compatibility" message="ʻAʻole kūpono paha kāu mau kauoha Macro a Run i mālama ʻia ma Nextpad++ v.8.5.2 (a ʻoi aku paha) me ka mana o Nextpad++ o kēia manawa.
 E ʻoluʻolu e hoʻāʻo i kēlā mau kauoha a, inā pono, e hoʻoponopono hou iā lākou.
 
-ʻO kahi ʻē aʻe, hiki iā ʻoe ke hoʻohaʻahaʻa i ka Notepad++ v8.5.2 a hoʻihoʻi i kāu ʻikepili mua.
-E hoʻopaʻa ʻo Notepad++ i kāu &quot;shortcuts.xml&quot; kahiko a mālama iā ia ma ke ʻano he &quot;shortcuts.xml.v8.5.2.backup&quot;.
-Hoʻololi i ka inoa &quot;shortcuts.xml.v8.5.2.backup&quot; -&gt; &quot;shortcuts.xml&quot;, pono e hoʻihoʻi ʻia kāu mau kauoha a hana pono."/><!-- HowToReproduce: Close Notepad++, remove shortcuts.xml.v8.5.2.backup & v852ShortcutsCompatibilityWarning.xml if present, relaunch Notepad++, delete or modify a shortcuts via Shortcut Mapper, close Notepad++, then the message will show up -->
+ʻO kahi ʻē aʻe, hiki iā ʻoe ke hoʻohaʻahaʻa i ka Nextpad++ v8.5.2 a hoʻihoʻi i kāu ʻikepili mua.
+E hoʻopaʻa ʻo Nextpad++ i kāu &quot;shortcuts.xml&quot; kahiko a mālama iā ia ma ke ʻano he &quot;shortcuts.xml.v8.5.2.backup&quot;.
+Hoʻololi i ka inoa &quot;shortcuts.xml.v8.5.2.backup&quot; -&gt; &quot;shortcuts.xml&quot;, pono e hoʻihoʻi ʻia kāu mau kauoha a hana pono."/><!-- HowToReproduce: Close Nextpad++, remove shortcuts.xml.v8.5.2.backup & v852ShortcutsCompatibilityWarning.xml if present, relaunch Nextpad++, delete or modify a shortcuts via Shortcut Mapper, close Nextpad++, then the message will show up -->
 			<FullReadOnlySavingForbidden title="ʻAʻole hiki ke mālama" message="ʻAʻole hiki ke mālama i ka faila.
-ʻO ka Notepad++ piha heluhelu-wale i ke ʻano pāpā ʻia i pale i ka mālama ʻana i ka faila."/>
+ʻO ka Nextpad++ piha heluhelu-wale i ke ʻano pāpā ʻia i pale i ka mālama ʻana i ka faila."/>
 			<NotEnoughRoom4Saving title="ʻAʻole hiki ke mālama" message="ʻAʻole hiki ke mālama i ka faila.
 Me he mea lā ʻaʻole lawa ka lewa ma ka disk e mālama ai i ka faila.ʻAʻole mālama ʻia kāu faila."/>
 			<FileInaccessibleUserSession title="Hiki ʻole ke kiʻi i ka faila" message="ʻAʻole hiki ke kiʻi ʻia kekahi mau faila mai kāu kau i mālama lima ʻia &quot;$STR_REPLACE$&quot;.Hiki iā lākou ke wehe ʻia ma ke ʻano he mau palapala hakahaka a heluhelu wale nō ma ke ʻano he mau wahi.
@@ -1828,8 +1828,8 @@ NĀ MEA: ʻAʻole e hoʻololi ʻia kāu kau i mālama lima ʻia ma ka puka ʻana
 Makemake ʻoe e hana i kēlā mau wahi waiho?
 
 KA MANAʻO: Ke koho ʻole e hana i nā mea hoʻopaʻa wahi a i ʻole e pani iā ​​​​lākou ma hope, e hoʻololi ʻia kāu kau ma ka EXIT!Manaʻo mākou iā ʻoe e hoʻihoʻi i kāu &quot;session.xml&quot; i kēia manawa."/>
-			<RTLvsDirectWrite title="ʻAʻole hiki ke holo RTL" message="ʻAʻole kūpono ʻo RTL me ke ʻano DirectWrite.E ʻoluʻolu e hoʻopau i ke ʻano DirectWrite ma MISC.ʻāpana o ka ʻōlelo Koho, a hoʻomaka hou i ka Notepad++."/>
-			<FileMemoryAllocationFailed title="Hoʻokoe: ʻAʻole i hāʻawi ʻia ka waihona hoʻomanaʻo waihona" message="ʻAʻole paha i lawa ka hoʻomanaʻo manuahi pili ʻole no ka faila i hoʻouka ʻia e Notepad++."/><!-- HowToReproduce: Try to open multiple files with total size > ~700MB in the x86 Notepad++ (it will depend on the PC memory configuration and the current system memory usage...). -->
+			<RTLvsDirectWrite title="ʻAʻole hiki ke holo RTL" message="ʻAʻole kūpono ʻo RTL me ke ʻano DirectWrite.E ʻoluʻolu e hoʻopau i ke ʻano DirectWrite ma MISC.ʻāpana o ka ʻōlelo Koho, a hoʻomaka hou i ka Nextpad++."/>
+			<FileMemoryAllocationFailed title="Hoʻokoe: ʻAʻole i hāʻawi ʻia ka waihona hoʻomanaʻo waihona" message="ʻAʻole paha i lawa ka hoʻomanaʻo manuahi pili ʻole no ka faila i hoʻouka ʻia e Nextpad++."/><!-- HowToReproduce: Try to open multiple files with total size > ~700MB in the x86 Nextpad++ (it will depend on the PC memory configuration and the current system memory usage...). -->
 			<FindRegexBackwardDisabled title="Ua pio ka huli ʻana i hope regex" message="Ma ka paʻamau, ua pio ka huli ʻana i hope regex ma muli o nā hopena i manaʻo ʻole ʻia.No ka huli ʻana i hope, wehe i ke kamaʻilio ʻimi a koho i ke ʻano hulina maʻamau a i ʻole ka hoʻonui ʻia ma kahi o ka ʻōlelo maʻamau.
 E kaomi i ke pihi OK no ka wehe ʻana i ke kamaʻilio ʻimi a hoʻonohonoho i ka manaʻo ma luna.
 
@@ -1837,8 +1837,8 @@ Inā makemake ʻoe i ka hiʻohiʻona huli regex hope, e ʻimi i ka manual mea ho
 			<PrintError title="0" message="ʻAʻole hiki ke hoʻomaka i ka palapala paʻi."/><!-- Use title="0" to use Windows OS default translated "Error" title. -->
 			<FindAutoChangeOfInSelectionWarning title="Huli ʻōlelo aʻo" message="Ua hoʻololi 'akomi 'ia ka moku'āina &quot;Ma ke koho&quot;.
 E ʻoluʻolu e hōʻoia i ke kūlana huli ma mua o ka hana ʻana i ka hana."/> <!-- HowToReproduce: https://github.com/notepad-plus-plus/notepad-plus-plus/issues/14897#issuecomment-2564316224 -->
-			<Need2Restart2ShowMenuShortcuts title="Pono e hoʻomaka hou ka Notepad++" message="Pono e hoʻomaka hou ka Notepad++ e hōʻike i nā pōkole papa kuhikuhi pololei."/>
-			<NoAdminRight2ChangeReadOnlyFileAttribute title="ʻAʻole hiki ke hoʻololi i ke ʻano heluhelu wale nō i ka faila" message="E ʻoluʻolu e holo i ka Notepad++ ma ke ʻano he luna hoʻoponopono e hoʻololi i nā ʻano faila."/>
+			<Need2Restart2ShowMenuShortcuts title="Pono e hoʻomaka hou ka Nextpad++" message="Pono e hoʻomaka hou ka Nextpad++ e hōʻike i nā pōkole papa kuhikuhi pololei."/>
+			<NoAdminRight2ChangeReadOnlyFileAttribute title="ʻAʻole hiki ke hoʻololi i ke ʻano heluhelu wale nō i ka faila" message="E ʻoluʻolu e holo i ka Nextpad++ ma ke ʻano he luna hoʻoponopono e hoʻololi i nā ʻano faila."/>
 		</MessageBox>
 		<ClipboardHistory>
 			<PanelTitle name="Moʻolelo Papapaʻi"/>
@@ -1958,8 +1958,8 @@ E ʻoluʻolu e hōʻoia i ke kūlana huli ma mua o ka hana ʻana i ka hana."/> <
 			<word-chars-list-warning-end value="ma kāu papa inoa."/><!-- HowToReproduce: In "Delimiter" section of Preferences dialog, check "Add your character as part of word\r(don't choose it unless you know what you're doing)", then type a white-space in the text field. -->
 			<backup-select-folder value="E koho i kahi waihona ma ke ʻano he papa kuhikuhi mālama"/><!-- HowToReproduce: Settings > Preferences > Backup > [...] -->
 			<cloud-invalid-warning value="ʻAʻohe ala."/>
-			<cloud-restart-warning value="E ʻoluʻolu e hoʻomaka hou i ka Notepad++ e hoʻokō."/>
-			<cloud-select-folder value="E koho i kahi waihona mai/i kahi o Notepad++ heluhelu/kākau ai i kona mau hoʻonohonoho"/><!-- HowToReproduce: In "Cloud" section of Preferences dialog, check "Set your cloud location path here: ", then click the button "...". This message is displayed in the "Browse For Folder" dialog. -->
+			<cloud-restart-warning value="E ʻoluʻolu e hoʻomaka hou i ka Nextpad++ e hoʻokō."/>
+			<cloud-select-folder value="E koho i kahi waihona mai/i kahi o Nextpad++ heluhelu/kākau ai i kona mau hoʻonohonoho"/><!-- HowToReproduce: In "Cloud" section of Preferences dialog, check "Set your cloud location path here: ", then click the button "...". This message is displayed in the "Browse For Folder" dialog. -->
 			<default-open-save-select-folder value="E koho i kahi waihona ma ke ʻano he papa kuhikuhi paʻamau"/><!-- HowToReproduce: Settings > Preferences > Default Directory > [...] -->
 			<shift-change-direction-tip value="E hoʻohana i ka Shift+Enter no ka huli ʻana ma kahi ʻaoʻao"/>
 			<two-find-buttons-tip value="2 ʻimi pihi ʻano"/>
@@ -2118,7 +2118,7 @@ Inā koho ʻoe i ke ʻano holomua akā ʻaʻole e hoʻoponopono i nā faila ma n
 
 			<!-- Don't translate "Global override" and "Default Style" -->
 			<global-override-tip value="ʻO ka hoʻā ʻana i ka &quot;Global override&quot; ma aneʻi e hoʻopau i kēlā ʻāpana i nā ʻano ʻōlelo āpau.ʻO ka mea āu e makemake ai, ʻo ia ka hoʻohana ʻana i nā hoʻonohonoho &quot;Default Style&quot; ma kahi o"/>
-			<scintillaRenderingTechnology-tip value="Hiki ke hoʻomaikaʻi i ka hāʻawi ʻana i nā kiʻi kūikawā a i ʻole e hoʻoholo i nā pilikia kiʻi, e hoʻomaka hou i ka Notepad++ e hoʻohana i nā loli."/>
+			<scintillaRenderingTechnology-tip value="Hiki ke hoʻomaikaʻi i ka hāʻawi ʻana i nā kiʻi kūikawā a i ʻole e hoʻoholo i nā pilikia kiʻi, e hoʻomaka hou i ka Nextpad++ e hoʻohana i nā loli."/>
 
 			<!-- Due to the limited space on the status bar, if the translations for 'length' & 'lines' are much longer than the English words, please leave them in English instead of translating them. -->
 			<statusbar-length-lines value="lōʻihi: $STR_REPLACE1$ laina: $STR_REPLACE2$"/>

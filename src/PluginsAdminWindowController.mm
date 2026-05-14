@@ -31,7 +31,7 @@
 @property (nonatomic, copy) NSString *macNppMinVersion;   // minimum host version
 
 // Runtime-only state populated by the Updates-tab scanner.
-@property (nonatomic, copy) NSString *installedDylibSHA;  // sha256(~/.notepad++/plugins/<folder>/<folder>.dylib)
+@property (nonatomic, copy) NSString *installedDylibSHA;  // sha256(~/.nextpad++/plugins/<folder>/<folder>.dylib)
 @property (nonatomic, copy) NSString *installedDylibDate; // YYYY-MM-DD of that file's mtime
 @end
 
@@ -54,9 +54,9 @@ static NSString *const kWinPluginListURL =
     @"https://raw.githubusercontent.com/notepad-plus-plus/nppPluginList/master/src/pl.x64.json";
 // macOS arm64 plugin list (our ported plugins — determines what's installable)
 static NSString *const kMacPluginListURL =
-    @"https://raw.githubusercontent.com/notepad-plus-plus-mac/nppPluginList/main/pl.macos-arm64.json";
+    @"https://raw.githubusercontent.com/nextpad-plus-plus/nppPluginList/main/pl.macos-arm64.json";
 static NSString *const kPluginListRepoURL =
-    @"https://github.com/notepad-plus-plus-mac/nppPluginList";
+    @"https://github.com/nextpad-plus-plus/nppPluginList";
 static NSString *const kPluginListVersion = @"0.2.0";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -397,7 +397,7 @@ static NSString *const kPluginListVersion = @"0.2.0";
 - (void)mergePluginListsWin:(NSData *)winData mac:(NSData *)macData {
     // macOS plugin list is the source of truth for what the "Available" tab
     // offers — our macOS binaries are independently built, signed, and hosted
-    // under the notepad-plus-plus-mac org, so a plugin must be present in
+    // under the nextpad-plus-plus org, so a plugin must be present in
     // pl.macos-arm64.json to be installable. The Windows list is consulted
     // twice:
     //   1. as a metadata fallback for mac entries that also exist upstream
@@ -576,7 +576,7 @@ static NSString *const kPluginListVersion = @"0.2.0";
     }
 
     NSString *pluginsDir = [NSHomeDirectory()
-        stringByAppendingPathComponent:@".notepad++/plugins"];
+        stringByAppendingPathComponent:@".nextpad++/plugins"];
 
     for (NppPluginEntry *ip in _installed) {
         NppPluginEntry *c = catalogByFolder[ip.folderName];
@@ -609,7 +609,7 @@ static NSString *const kPluginListVersion = @"0.2.0";
 
 - (void)scanInstalledPlugins {
     [_installed removeAllObjects];
-    NSString *pluginsDir = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/plugins"];
+    NSString *pluginsDir = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins"];
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *subdirs = [fm contentsOfDirectoryAtPath:pluginsDir error:nil];
 
@@ -712,7 +712,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
 // the Updates tab; re-run on each open so we pick up any manual edits.
 - (void)refreshInstalledDylibFingerprints {
     NSString *pluginsDir = [NSHomeDirectory()
-        stringByAppendingPathComponent:@".notepad++/plugins"];
+        stringByAppendingPathComponent:@".nextpad++/plugins"];
     NSFileManager *fm = [NSFileManager defaultManager];
 
     // Build a folder-name → full-dylib-path map from _installed (which
@@ -798,7 +798,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
             _actionButton.title = [loc translate:@"Update"];
             _actionButton.hidden = NO;
             // Re-scan on every Updates-tab open — cheap, and keeps us
-            // honest against manual edits to ~/.notepad++/plugins/.
+            // honest against manual edits to ~/.nextpad++/plugins/.
             [self refreshInstalledDylibFingerprints];
             [_filteredList addObjectsFromArray:[self updateCandidates]];
             break;
@@ -1054,7 +1054,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
         @"%@\n\n%@\n\n%@\n\n%@",
         [loc translate:@"Update the following plugins?"],
         [names componentsJoinedByString:@"\n"],
-        [loc translate:@"Current versions are backed up to ~/.notepad++/plugin-backups/ before being replaced."],
+        [loc translate:@"Current versions are backed up to ~/.nextpad++/plugin-backups/ before being replaced."],
         [loc translate:@"Restart the application for changes to take effect."]];
     [confirm addButtonWithTitle:[loc translate:@"Update"]];
     [confirm addButtonWithTitle:[loc translate:@"Cancel"]];
@@ -1082,15 +1082,15 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
     }];
 }
 
-// Zip the plugin folder to ~/.notepad++/plugin-backups/<folder>_<ts>.zip
+// Zip the plugin folder to ~/.nextpad++/plugin-backups/<folder>_<ts>.zip
 // via ditto -c -k --keepParent, then remove the folder. Returns YES iff
 // both steps succeeded so the caller knows it's safe to let the
 // extraction step overwrite.
 - (BOOL)backupAndDeletePluginFolder:(NppPluginEntry *)pe {
     NSString *home       = NSHomeDirectory();
-    NSString *pluginDir  = [[home stringByAppendingPathComponent:@".notepad++/plugins"]
+    NSString *pluginDir  = [[home stringByAppendingPathComponent:@".nextpad++/plugins"]
         stringByAppendingPathComponent:pe.folderName];
-    NSString *backupDir  = [home stringByAppendingPathComponent:@".notepad++/plugin-backups"];
+    NSString *backupDir  = [home stringByAppendingPathComponent:@".nextpad++/plugin-backups"];
     NSFileManager *fm    = [NSFileManager defaultManager];
 
     // If there's nothing on disk, there's nothing to back up or remove —
@@ -1102,7 +1102,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
                         attributes:nil error:&err]) {
         NSLog(@"[PluginsAdmin] Backup dir create failed: %@", err);
         [self showInstallError:pe.displayName
-                       detail:@"Could not create ~/.notepad++/plugin-backups/. Update skipped — existing plugin folder is untouched."];
+                       detail:@"Could not create ~/.nextpad++/plugin-backups/. Update skipped — existing plugin folder is untouched."];
         return NO;
     }
 
@@ -1213,9 +1213,9 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
                     }
                 }
 
-                // Extract ZIP to ~/.notepad++/plugins/
+                // Extract ZIP to ~/.nextpad++/plugins/
                 NSString *pluginsDir = [NSHomeDirectory()
-                    stringByAppendingPathComponent:@".notepad++/plugins"];
+                    stringByAppendingPathComponent:@".nextpad++/plugins"];
                 NSFileManager *fm = [NSFileManager defaultManager];
                 [fm createDirectoryAtPath:pluginsDir withIntermediateDirectories:YES
                                attributes:nil error:nil];
@@ -1300,7 +1300,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
         if (resp != NSAlertFirstButtonReturn) return;
 
         NSString *pluginsDir = [NSHomeDirectory()
-            stringByAppendingPathComponent:@".notepad++/plugins"];
+            stringByAppendingPathComponent:@".nextpad++/plugins"];
         NSFileManager *fm = [NSFileManager defaultManager];
 
         for (NSString *name in self->_checkedPlugins) {

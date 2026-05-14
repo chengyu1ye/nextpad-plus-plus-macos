@@ -739,9 +739,9 @@ static _FLNode *_findParserNode(_FLNode *root) {
 static _FLNode *_loadParserXML(NSString *lang) {
     NSFileManager *fm = [NSFileManager defaultManager];
 
-    // 1. Check user override: ~/.notepad++/functionList/<lang>.xml
+    // 1. Check user override: ~/.nextpad++/functionList/<lang>.xml
     NSString *userPath = [NSHomeDirectory() stringByAppendingPathComponent:
-                          [NSString stringWithFormat:@".notepad++/functionList/%@.xml", lang]];
+                          [NSString stringWithFormat:@".nextpad++/functionList/%@.xml", lang]];
     NSData *data = [fm fileExistsAtPath:userPath] ? [NSData dataWithContentsOfFile:userPath] : nil;
 
     // 2. Fall back to bundled: Resources/functionList/<lang>.xml
@@ -1097,7 +1097,7 @@ static BOOL _isInComment(NSRange range, NSIndexSet *commentRanges) {
     }];
 }
 
-/// Check ~/.notepad++/functionList/<lang>.xml for a user-defined pattern override.
+/// Check ~/.nextpad++/functionList/<lang>.xml for a user-defined pattern override.
 /// Expected format:
 ///   <NotepadPlus><functionList><parser>
 ///     <function mainExpr="regex-with-capture-group-1-for-name" />
@@ -1106,7 +1106,7 @@ static BOOL _isInComment(NSRange range, NSIndexSet *commentRanges) {
 /// Returns nil if no user override exists or the file can't be parsed.
 static NSString *_userFuncPatternForLanguage(NSString *lang, NSString * __autoreleasing *outClassPattern) {
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:
-                      [NSString stringWithFormat:@".notepad++/functionList/%@.xml", lang.lowercaseString]];
+                      [NSString stringWithFormat:@".nextpad++/functionList/%@.xml", lang.lowercaseString]];
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (!data) return nil;
 

@@ -1,7 +1,7 @@
 /*
- * NppPluginInterfaceMac.h — macOS Plugin API for Notepad++
+ * NppPluginInterfaceMac.h — macOS Plugin API for Nextpad++
  *
- * This header defines the plugin contract for the macOS port of Notepad++.
+ * This header defines the plugin contract for the macOS port of Nextpad++.
  * It mirrors the Windows PluginInterface.h + Notepad_plus_msgs.h with
  * macOS-native types.  All NPPM_* and NPPN_* constants use the SAME
  * integer values as Windows so plugin source code can share constants.
@@ -64,7 +64,7 @@ typedef uintptr_t NppHandle;
 
 /*
  * NppSendMessageFunc — replaces Win32 ::SendMessage().
- * Plugins call this for ALL communication with Notepad++ and Scintilla.
+ * Plugins call this for ALL communication with Nextpad++ and Scintilla.
  *   handle: one of NppData._nppHandle / _scintillaMainHandle / _scintillaSecondHandle
  *   msg:    NPPM_* constant (for nppHandle) or SCI_* constant (for scintilla handles)
  *   wParam, lParam: message-specific parameters (same semantics as Windows)
@@ -78,7 +78,7 @@ typedef intptr_t (*NppSendMessageFunc)(uintptr_t handle, uint32_t msg,
 
 /* Passed to plugin via setInfo(). */
 struct NppData {
-    NppHandle _nppHandle;              /* Notepad++ main (routes NPPM_* messages)  */
+    NppHandle _nppHandle;              /* Nextpad++ main (routes NPPM_* messages)  */
     NppHandle _scintillaMainHandle;    /* Primary editor  (routes SCI_* messages)  */
     NppHandle _scintillaSecondHandle;  /* Secondary editor (routes SCI_* messages) */
     NppSendMessageFunc _sendMessage;   /* Function to call instead of SendMessage  */
@@ -225,7 +225,7 @@ typedef intptr_t           (*PMESSAGEPROC)(uint32_t, uintptr_t, intptr_t);
 
 /* ── macOS-specific extensions ──────────────────────────────────────────
  *
- * These messages exist only in the macOS port of Notepad++ and have no
+ * These messages exist only in the macOS port of Nextpad++ and have no
  * equivalent on Windows NPP. Slots NPPMSG+500 upward are reserved for
  * macOS-only use so they can never collide with a future backport from
  * the Windows tree (which currently uses +0..+119).
@@ -446,7 +446,7 @@ struct CommunicationInfo {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /*
- * setInfo — called once at load time with Notepad++ handles.
+ * setInfo — called once at load time with Nextpad++ handles.
  *   Store nppData and initialise your FuncItem array here.
  */
 NPP_EXPORT void             setInfo(struct NppData nppData);
@@ -463,7 +463,7 @@ NPP_EXPORT const char *     getName(void);
 NPP_EXPORT struct FuncItem * getFuncsArray(int *nbF);
 
 /*
- * beNotified — receive Scintilla (SCN_*) and Notepad++ (NPPN_*)
+ * beNotified — receive Scintilla (SCN_*) and Nextpad++ (NPPN_*)
  *   notifications.  Check notifyCode->nmhdr.code for the event type.
  */
 NPP_EXPORT void             beNotified(struct SCNotification *notifyCode);

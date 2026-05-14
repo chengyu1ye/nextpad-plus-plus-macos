@@ -12,7 +12,7 @@ extern NSNotificationName const NPPLocalizationChanged;
 extern NSString * const kPrefLanguage;
 
 // ---------------------------------------------------------------------------
-// NppLocalizer — singleton that loads a Notepad++ nativeLang XML file
+// NppLocalizer — singleton that loads a Nextpad++ nativeLang XML file
 // (the exact same format used by the Windows version) and applies
 // translations to the macOS app's main menu and on-demand string lookups.
 //
@@ -77,7 +77,7 @@ extern NSString * const kPrefLanguage;
 
 /// Path of the per-user localization directory.
 /// Users can drop additional XML files here to add languages.
-/// ~/Library/Application Support/Notepad++/localization/
+/// ~/Library/Application Support/Nextpad++/localization/
 + (NSString *)userLanguageDirectory;
 
 /// Path of the localization directory bundled inside the app.

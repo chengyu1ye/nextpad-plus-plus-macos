@@ -122,7 +122,7 @@
 
     // Title bar addition (-titleAdd)
     if (cli.titleAdd.length) {
-        NSString *base = self.mainWindowController.window.title ?: @"Notepad++";
+        NSString *base = self.mainWindowController.window.title ?: @"Nextpad++";
         self.mainWindowController.window.title = [NSString stringWithFormat:@"%@ - %@", base, cli.titleAdd];
     }
 
@@ -192,10 +192,10 @@
         NSTimeInterval elapsed = -[self.launchStart timeIntervalSinceNow];
         NSString *msg = [NSString stringWithFormat:@"Loading time: %.2f seconds", elapsed];
         NSAlert *a = [[NSAlert alloc] init];
-        a.messageText = [[NppLocalizer shared] translate:@"Notepad++ Loading Time"];
+        a.messageText = [[NppLocalizer shared] translate:@"Nextpad++ Loading Time"];
         a.informativeText = msg;
         a.icon = [[NSImage alloc] initWithContentsOfFile:
-            [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/plugins/Config/logo100px.png"]];
+            [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins/Config/logo100px.png"]];
         [a runModal];
     }
 
@@ -413,7 +413,7 @@
 
 /// Load shortcut overrides from shortcuts.xml <InternalCommands> and apply to live menu items.
 - (void)_loadShortcutOverrides {
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/shortcuts.xml"];
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (!data) {
         NSLog(@"[Shortcuts] No shortcuts.xml found at %@ — skipping overrides", path);
@@ -576,7 +576,7 @@
     if ([panel runModal] != NSModalResponseOK) return;
 
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *themesDir = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/themes"];
+    NSString *themesDir = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/themes"];
     [fm createDirectoryAtPath:themesDir withIntermediateDirectories:YES attributes:nil error:nil];
 
     NSInteger imported = 0;
@@ -606,7 +606,7 @@
 #endif
 
     NSAlert *about = [[NSAlert alloc] init];
-    about.messageText = [NSString stringWithFormat:@"Notepad++ macOS v%@     (%@)", version, archStr];
+    about.messageText = [NSString stringWithFormat:@"Nextpad++ macOS v%@     (%@)", version, archStr];
 
     NSString *license =
         @"GNU General Public Licence\n\n"
@@ -624,12 +624,12 @@
 
     about.informativeText = [NSString stringWithFormat:
         @"Build time: %s - %s\n\n"
-        @"Home: https://notepad-plus-plus-mac.org\n\n"
+        @"Home: https://nextpad.org\n\n"
         @"%@", __DATE__, __TIME__, license];
 
     // Use our logo
     NSImage *logo = [[NSImage alloc] initWithContentsOfFile:
-        [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/plugins/Config/logo100px.png"]];
+        [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins/Config/logo100px.png"]];
     if (!logo) {
         // Fallback: try bundle resource
         NSString *logoPath = [[NSBundle mainBundle] pathForResource:@"logo100px" ofType:@"png"
@@ -644,7 +644,7 @@
 
 // ── Update check (GitHub Releases API) ──────────────────────────────────────
 
-static NSString *const kGitHubReleasesAPI = @"https://api.github.com/repos/notepad-plus-plus-mac/notepad-plus-plus-macos/releases/latest";
+static NSString *const kGitHubReleasesAPI = @"https://api.github.com/repos/nextpad-plus-plus/nextpad-plus-plus-macos/releases/latest";
 static NSString *const kUpdateMenuItemTag = @"checkForUpdatesMenuItem";
 
 /// Find the "Check for Updates..." menu item in the app menu.
@@ -745,7 +745,7 @@ static NSString *const kUpdateMenuItemTag = @"checkForUpdatesMenuItem";
                     NSAlert *a = [[NSAlert alloc] init];
                     a.messageText = [loc translate:@"You're Up to Date"];
                     a.informativeText = [NSString stringWithFormat:
-                        @"Notepad++ %@ %@", currentVersion, [loc translate:@"is the latest version."]];
+                        @"Nextpad++ %@ %@", currentVersion, [loc translate:@"is the latest version."]];
                     [a runModal];
                 }
             }
@@ -762,7 +762,7 @@ static NSString *const kUpdateMenuItemTag = @"checkForUpdatesMenuItem";
 
     NppLocalizer *loc = [NppLocalizer shared];
     NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = [NSString stringWithFormat:@"Notepad++ v%@ %@", version, [loc translate:@"is Available"]];
+    alert.messageText = [NSString stringWithFormat:@"Nextpad++ v%@ %@", version, [loc translate:@"is Available"]];
     alert.informativeText = [NSString stringWithFormat:
         @"%@ v%@.\n\n%@",
         [loc translate:@"You are currently running"],

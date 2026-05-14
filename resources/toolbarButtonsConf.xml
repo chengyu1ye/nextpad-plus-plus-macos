@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <NotepadPlus>
 <!--
-  Toolbar Configuration for Notepad++ (macOS)
+  Toolbar Configuration for Nextpad++ (macOS)
   ============================================
   This file controls which buttons appear on the toolbar and how they look.
 
-  To customize: copy ~/.notepad++/toolbarButtonsConf_example.xml
-  to ~/.notepad++/toolbarButtonsConf.xml, edit it, and relaunch Notepad++.
+  To customize: copy ~/.nextpad++/toolbarButtonsConf_example.xml
+  to ~/.nextpad++/toolbarButtonsConf.xml, edit it, and relaunch Nextpad++.
 
   Each <Button> has these attributes:
     hide     = "yes" or "no" (whether the button is visible on the toolbar)
@@ -180,10 +180,10 @@
 <!--
   Custom Toolbar Icons
   ====================
-  Place custom .png icons in ~/.notepad++/toolbarIcons/{folderName}/
+  Place custom .png icons in ~/.nextpad++/toolbarIcons/{folderName}/
   Each icon should be named matching the id attribute (e.g. TB_Save.png).
   Missing icons will use the built-in default.
-  Set icoFolderName="" to use ~/.notepad++/toolbarIcons/default/
+  Set icoFolderName="" to use ~/.nextpad++/toolbarIcons/default/
 -->
   <ToolBarIcons icoFolderName="" />
 

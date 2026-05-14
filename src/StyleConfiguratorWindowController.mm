@@ -151,8 +151,8 @@ static NSString *modelLexerID(NSString *themeID) {
 }
 
 - (NSMutableArray<NPPLexer *> *)_parseDefaultXML {
-    // Read from ~/.notepad++/stylers.xml first (user-editable), fall back to bundle model.
-    NSString *userStylers = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/stylers.xml"];
+    // Read from ~/.nextpad++/stylers.xml first (user-editable), fall back to bundle model.
+    NSString *userStylers = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/stylers.xml"];
     NSURL *url = nil;
     if ([[NSFileManager defaultManager] fileExistsAtPath:userStylers]) {
         url = [NSURL fileURLWithPath:userStylers];
@@ -190,7 +190,7 @@ static NSString *modelLexerID(NSString *themeID) {
         return result; // "Default (stylers.xml)" = pure model defaults
     }
 
-    // Find theme XML: check user ~/.notepad++/themes/ first, then bundle
+    // Find theme XML: check user ~/.nextpad++/themes/ first, then bundle
     NSURL *themeURL = nil;
     NSString *userPath = [_userThemesDir() stringByAppendingPathComponent:
                           [themeName stringByAppendingPathExtension:@"xml"]];
@@ -243,9 +243,9 @@ static NSString *modelLexerID(NSString *themeID) {
 
 // ── Available themes ──────────────────────────────────────────────────────────
 
-/// Return path to ~/.notepad++/themes/ (user-installed themes directory).
+/// Return path to ~/.nextpad++/themes/ (user-installed themes directory).
 static NSString *_userThemesDir(void) {
-    return [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/themes"];
+    return [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/themes"];
 }
 
 - (NSArray<NSString *> *)availableThemeNames {
@@ -254,7 +254,7 @@ static NSString *_userThemesDir(void) {
 
     NSMutableSet<NSString *> *seen = [NSMutableSet new]; // deduplicate by name
 
-    // Scan user themes first (~/.notepad++/themes/) — user themes override bundled
+    // Scan user themes first (~/.nextpad++/themes/) — user themes override bundled
     NSString *userDir = _userThemesDir();
     NSArray<NSString *> *userFiles = [[NSFileManager defaultManager]
         contentsOfDirectoryAtPath:userDir error:nil];
@@ -450,7 +450,7 @@ static NSString *_userThemesDir(void) {
     // Determine target XML file
     NSString *xmlPath;
     if ([themeName isEqualToString:kDefaultThemeName] || !themeName.length) {
-        xmlPath = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/stylers.xml"];
+        xmlPath = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/stylers.xml"];
     } else {
         // User themes dir first; if not there, copy from bundle
         NSString *userPath = [_userThemesDir() stringByAppendingPathComponent:
@@ -1046,7 +1046,7 @@ static NSString *_userThemesDir(void) {
     NSOpenPanel *panel = [NSOpenPanel openPanel];
     panel.title = [[NppLocalizer shared] translate:@"Import Style Theme"];
     panel.allowedFileTypes = @[@"xml"];
-    panel.message = [[NppLocalizer shared] translate:@"Select a Notepad++ theme XML file to apply"];
+    panel.message = [[NppLocalizer shared] translate:@"Select a Nextpad++ theme XML file to apply"];
     [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse result) {
         if (result != NSModalResponseOK) return;
         [self _loadNppThemeXML:panel.URL];

@@ -307,7 +307,7 @@ static NSString *normalizeForLookup(NSString *s) {
     NSString *appSupport = [NSSearchPathForDirectoriesInDomains(
         NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
     NSString *dir = [appSupport stringByAppendingPathComponent:
-                     @"Notepad++/localization"];
+                     @"Nextpad++/localization"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
                               withIntermediateDirectories:YES
                                                attributes:nil
@@ -510,7 +510,7 @@ static NSString *normalizeForLookup(NSString *s) {
         @"on selection":                   @"submenu:edit-onSelection",
         @"convert case to":                @"submenu:edit-convertCaseTo",
         @"line operations":                @"submenu:edit-lineOperations",
-        @"read-only in notepad++":         @"submenu:edit-readonlyInNotepad++",
+        @"read-only in notepad++":         @"submenu:edit-readonlyInNextpad++",
         @"insert":                         @"submenu:edit-insert",
         @"copy to clipboard":              @"submenu:edit-copyToClipboard",
         @"multi-select all":               @"submenu:edit-multiSelectALL",

@@ -181,7 +181,7 @@ static const uintptr_t kHandleScintillaSub   = 0x5343490B;  // "SCI\v"
 // ── Plugin directory ────────────────────────────────────────────────────
 
 static NSString *pluginBaseDir(void) {
-    return [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/plugins"];
+    return [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins"];
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────
@@ -952,7 +952,7 @@ static intptr_t _npp_run_on_main(intptr_t (^block)(void)) {
         case NPPM_GETNPPSETTINGSDIRPATH: {
             char *buf = (char *)lParam;
             if (buf) {
-                NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++"];
+                NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++"];
                 strlcpy(buf, path.UTF8String, 1024);
                 return (intptr_t)strlen(buf);
             }

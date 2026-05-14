@@ -40,7 +40,7 @@ extern "C" Scintilla::ILexer5 *CreateLexer(const char *name);
 
 + (NSString *)userUDLDirectory {
     NSString *home = NSHomeDirectory();
-    NSString *dir = [home stringByAppendingPathComponent:@".notepad++/userDefineLangs"];
+    NSString *dir = [home stringByAppendingPathComponent:@".nextpad++/userDefineLangs"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
                               withIntermediateDirectories:YES attributes:nil error:nil];
     return dir;
@@ -62,7 +62,7 @@ extern "C" Scintilla::ILexer5 *CreateLexer(const char *name);
     [self _loadFromDirectory:[UserDefineLangManager userUDLDirectory]];
 
     // Also check for the legacy single-file container (userDefineLang.xml)
-    NSString *legacyPath = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/userDefineLang.xml"];
+    NSString *legacyPath = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/userDefineLang.xml"];
     if ([[NSFileManager defaultManager] fileExistsAtPath:legacyPath]) {
         [self _loadFromContainerFile:legacyPath];
     }

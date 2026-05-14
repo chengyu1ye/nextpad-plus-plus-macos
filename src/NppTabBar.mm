@@ -1188,7 +1188,7 @@ static NSMenu *_buildTabContextMenuFromXML(NSString *xmlPath) {
 
 - (NSMenu *)buildTabContextMenu {
     // Try user-customized tabContextMenu.xml first
-    NSString *configDir = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++"];
+    NSString *configDir = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++"];
     NSString *customPath = [configDir stringByAppendingPathComponent:@"tabContextMenu.xml"];
     NSMenu *menu = _buildTabContextMenuFromXML(customPath);
     if (menu) return menu;

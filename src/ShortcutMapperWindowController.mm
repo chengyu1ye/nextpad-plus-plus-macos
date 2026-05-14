@@ -368,7 +368,7 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
     }
     // Mark entries that have overrides in shortcuts.xml and restore their shortcuts
     // from the XML (macOS may silently clear duplicate keyEquivalents on live menu items)
-    NSString *scPath = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/shortcuts.xml"];
+    NSString *scPath = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
     NSData *scData = [NSData dataWithContentsOfFile:scPath];
     if (scData) {
         NSXMLDocument *scDoc = [[NSXMLDocument alloc] initWithData:scData options:0 error:nil];
@@ -481,7 +481,7 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
 
 - (void)_loadMacroEntries {
     _macroEntries = [NSMutableArray array];
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/shortcuts.xml"];
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (!data) return;
     NSXMLDocument *doc = [[NSXMLDocument alloc] initWithData:data options:0 error:nil];
@@ -508,7 +508,7 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
     _runCmdEntries = [NSMutableArray array];
 
     // Load from shortcuts.xml <UserDefinedCommands> only (matches Windows behavior)
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/shortcuts.xml"];
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
     NSData *data = [NSData dataWithContentsOfFile:path];
 
     // If no UserDefinedCommands exist in shortcuts.xml, create defaults
@@ -535,7 +535,7 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
         }
     }
 
-    // Default entries come from the bundled shortcuts.xml (copied to ~/.notepad++/ on first run)
+    // Default entries come from the bundled shortcuts.xml (copied to ~/.nextpad++/ on first run)
     NSLog(@"[ShortcutMapper] Run commands: %lu entries", (unsigned long)_runCmdEntries.count);
 }
 
@@ -664,7 +664,7 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
         {"SCI_STUTTEREDPAGEDOWNEXTEND",2438,NO, NO,  NO,  0},
     };
     // Read existing overrides from shortcuts.xml
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/shortcuts.xml"];
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
     NSData *xmlData = [NSData dataWithContentsOfFile:path];
     NSXMLDocument *xmlDoc = xmlData ? [[NSXMLDocument alloc] initWithData:xmlData options:0 error:nil] : nil;
     NSArray *xmlScintKeys = xmlDoc ? [xmlDoc nodesForXPath:@"//ScintillaKeys/ScintKey" error:nil] : @[];
@@ -1110,8 +1110,19 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
     for (ShortcutEntry *e in allEntries) {
         if (!e.isModified) continue;
         if (!e.selectorName) continue;
-        SEL sel = NSSelectorFromString(e.selectorName);
-        NSMenuItem *mi = [self _findMenuItemWithAction:sel inMenu:[NSApp mainMenu]];
+        // Plugin commands all share the same selector (pluginMenuAction:), so a
+        // selector-only lookup returns the *first* plugin menu item in the
+        // walk and applies every plugin shortcut to it (issue #86). Resolve
+        // plugin entries via (pluginName, commandID) instead — mirroring the
+        // logic AppDelegate._loadShortcutOverrides already uses to apply
+        // shortcuts.xml at launch.
+        NSMenuItem *mi = nil;
+        if ([e.selectorName isEqualToString:@"pluginMenuAction:"] && e.pluginName.length) {
+            mi = [self _findPluginMenuItemWithName:e.pluginName internalID:e.commandID];
+        } else {
+            SEL sel = NSSelectorFromString(e.selectorName);
+            mi = [self _findMenuItemWithAction:sel inMenu:[NSApp mainMenu]];
+        }
         if (!mi) continue;
         [self _applyShortcutEntry:e toMenuItem:mi];
         modCount++;
@@ -1167,6 +1178,34 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
     mi.keyEquivalentModifierMask = mods;
 }
 
+// Resolve a plugin menu item by (pluginName, commandID) instead of by
+// selector. The selector pluginMenuAction: is shared across every plugin
+// command; only (parent-submenu-title, NSMenuItem.tag) identifies a command
+// uniquely. Mirrors AppDelegate._loadShortcutOverrides:485-505 — keep both
+// codepaths in sync if the matching policy ever changes.
+//
+// The tag-OR-cmdIdx fallback is intentional: most plugins assign tags 0..N
+// sequentially so cmdIdx == tag in practice, but if a plugin uses sparse
+// or unset tags, the cmdIdx leg still finds the Nth runnable command.
+- (nullable NSMenuItem *)_findPluginMenuItemWithName:(NSString *)pluginName
+                                          internalID:(NSInteger)internalID {
+    if (!pluginName.length) return nil;
+    NSMenu *pluginsMenu = [[[NSApp mainMenu] itemWithTag:kMenuTagPlugins] submenu];
+    if (!pluginsMenu) return nil;
+    for (NSMenuItem *pluginItem in pluginsMenu.itemArray) {
+        if (![pluginItem.title isEqualToString:pluginName]) continue;
+        if (!pluginItem.submenu) continue;
+        NSInteger cmdIdx = 0;
+        for (NSMenuItem *cmdItem in pluginItem.submenu.itemArray) {
+            if (cmdItem.isSeparatorItem || !cmdItem.action) continue;
+            if (cmdItem.tag == internalID || cmdIdx == internalID)
+                return cmdItem;
+            cmdIdx++;
+        }
+    }
+    return nil;
+}
+
 - (nullable NSMenuItem *)_findMenuItemWithAction:(SEL)action inMenu:(NSMenu *)menu {
     for (NSMenuItem *mi in menu.itemArray) {
         if (mi.action == action) return mi;
@@ -1179,7 +1218,7 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
 }
 
 - (void)_saveToShortcutsXML {
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".notepad++/shortcuts.xml"];
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
 
     // Read existing shortcuts.xml — modify in-place to preserve comments and structure
     NSData *existingData = [NSData dataWithContentsOfFile:path];

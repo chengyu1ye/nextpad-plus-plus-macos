@@ -9,7 +9,7 @@ static void printHelp(const char *progName) {
         "  %s [options] [filePath ...]\n\n"
         "Options:\n"
         "  --help                       This help message\n"
-        "  -multiInst                   Launch another Notepad++ instance\n"
+        "  -multiInst                   Launch another Nextpad++ instance\n"
         "  -noPlugin                    Launch without loading any plugin\n"
         "  -lLanguage                   Open file with syntax highlighting of choice\n"
         "  -udl=\"My UDL Name\"           Open file applying User Defined Language\n"

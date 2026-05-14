@@ -184,7 +184,7 @@ static NSMenu *buildLanguageMenu() {
     NSMenu *udlMenu = submenu(@"User Defined Language");
     [udlMenu addItem:item(@"Define your language…", @selector(showDefineLanguage:), @"")];
     [udlMenu addItem:item(@"Open User Defined Language Folder…", @selector(openUDLFolder:), @"")];
-    [udlMenu addItem:item(@"Notepad++ User Defined Languages Collection", @selector(openUDLCollection:), @"")];
+    [udlMenu addItem:item(@"Nextpad++ User Defined Languages Collection", @selector(openUDLCollection:), @"")];
     [m addItem:withSubmenu(@"User Defined Language", udlMenu)];
     // Pre-installed Markdown UDLs — use UDL action (not built-in lexer)
     NSMenuItem *mdItem = item(@"Markdown (preinstalled)", @selector(setUDLLanguageFromMenu:), @"");
@@ -215,16 +215,16 @@ static NSMenu *buildLanguageMenu() {
     [main addItem:appItem];
     NSMenu *appMenu = submenu(@"App");
     appItem.submenu = appMenu;
-    [appMenu addItemWithTitle:@"About Notepad++" action:@selector(showAboutPanel:) keyEquivalent:@""];
+    [appMenu addItemWithTitle:@"About Nextpad++" action:@selector(showAboutPanel:) keyEquivalent:@""];
     [appMenu addItemWithTitle:@"Check for Updates…" action:@selector(checkForUpdates:) keyEquivalent:@""];
     [appMenu addItemWithTitle:@"Install nextpad++ Command Line Tool…" action:@selector(installCommandLineTool:) keyEquivalent:@""];
     addSep(appMenu);
-    [appMenu addItemWithTitle:@"Hide Notepad++" action:@selector(hide:) keyEquivalent:@"h"];
+    [appMenu addItemWithTitle:@"Hide Nextpad++" action:@selector(hide:) keyEquivalent:@"h"];
     NSMenuItem *hideOthers = [appMenu addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
     hideOthers.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
     [appMenu addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""];
     addSep(appMenu);
-    [appMenu addItemWithTitle:@"Quit Notepad++" action:@selector(terminate:) keyEquivalent:@"q"];
+    [appMenu addItemWithTitle:@"Quit Nextpad++" action:@selector(terminate:) keyEquivalent:@"q"];
 
     // ── File ─────────────────────────────────────────────────────────────────
     NSMenuItem *fileItem = [[NSMenuItem alloc] init];
@@ -472,10 +472,10 @@ static NSMenu *buildLanguageMenu() {
     [editMenu addItem:item(@"Clipboard History", @selector(showClipboardHistory:), @"")];
     addSep(editMenu);
 
-    NSMenu *roMenu = submenu(@"Read-Only in Notepad++");
+    NSMenu *roMenu = submenu(@"Read-Only in Nextpad++");
     [roMenu addItem:item(@"Toggle Read-Only",        @selector(toggleReadOnly:),  @"")];
     [roMenu addItem:item(@"Clear Read-Only Flag", @selector(clearReadOnlyFlag:), @"")];
-    [editMenu addItem:withSubmenu(@"Read-Only in Notepad++", roMenu)];
+    [editMenu addItem:withSubmenu(@"Read-Only in Nextpad++", roMenu)];
     NSMenu *lockedMenu = submenu(@"Locked Attribute (macOS)");
     [lockedMenu addItem:item(@"Lock",   @selector(lockFileAttribute:),   @"")];
     [lockedMenu addItem:item(@"Unlock", @selector(unlockFileAttribute:), @"")];
@@ -506,7 +506,7 @@ static NSMenu *buildLanguageMenu() {
     // winner when two app menu items share a shortcut — the result was
     // undefined dispatch. ⇧⌘H also forms a logical pair with ⌘F and
     // ⇧⌘F, so the Shift modifier consistently means "another Find
-    // variant", and matches the natural Mac mapping for Notepad++ on
+    // variant", and matches the natural Mac mapping for Nextpad++ on
     // Windows where Ctrl+H is Replace. Both ⇧⌘H itself and ⌥⌘H now
     // dispatch unambiguously to a single, expected target.
     [searchMenu addItem:itemMod(@"Replace…", @selector(showReplacePanel:), @"h",
@@ -974,10 +974,12 @@ static NSMenu *buildLanguageMenu() {
 
     [helpMenu addItem:item(@"Command Line Arguments…", @selector(showCLIHelp:), @"")];
     addSep(helpMenu);
-    [helpMenu addItem:item(@"Notepad++ macOS Home",              @selector(openNppHome:),        @"")];
-    [helpMenu addItem:item(@"Notepad++ macOS Project Page",      @selector(openNppProjectPage:), @"")];
-    [helpMenu addItem:item(@"Notepad++ Online User Manual",@selector(openNppManual:),      @"")];
-    [helpMenu addItem:item(@"Notepad++ Community (Forum)", @selector(openNppForum:),       @"")];
+    [helpMenu addItem:item(@"Nextpad++ macOS Home",              @selector(openNppHome:),        @"")];
+    [helpMenu addItem:item(@"Nextpad++ macOS Project Page",      @selector(openNppProjectPage:), @"")];
+    [helpMenu addItem:item(@"Online User Manual",@selector(openNppManual:),      @"")];
+    // Commented out — community forum URL not yet established for the
+    // rebranded project. Re-enable once a forum is set up.
+    // [helpMenu addItem:item(@"Nextpad++ Community (Forum)", @selector(openNppForum:),       @"")];
     addSep(helpMenu);
     [helpMenu addItem:item(@"Debug Info…", @selector(showDebugInfo:), @"")];
 }

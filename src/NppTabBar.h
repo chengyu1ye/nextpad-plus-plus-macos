@@ -16,7 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)tabBarDidRequestNewTab:(NppTabBar *)bar;
 @end
 
-/// Left-aligned tab bar styled after Notepad++.
+/// Left-aligned tab bar styled after Nextpad++.
 @interface NppTabBar : NSView
 
 @property (nonatomic, weak, nullable) id<NppTabBarDelegate> delegate;

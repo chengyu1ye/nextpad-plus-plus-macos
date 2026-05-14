@@ -2,7 +2,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// Parses and stores Notepad++ command line arguments.
+/// Parses and stores Nextpad++ command line arguments.
 /// Mirrors the Windows CmdLineParams struct with macOS-appropriate types.
 @interface NppCommandLineParams : NSObject
 
