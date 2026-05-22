@@ -11,6 +11,7 @@ NSString *const kPrefAutoIndent         = @"autoIndent";  // 0=None 1=Advanced 2
 NSString *const kPrefBackspaceUnindent = @"backspaceUnindent";
 NSString *const kPrefTabOverrides      = @"tabOverrides"; // {langName: {tabSize:N, useTabs:BOOL}}
 NSString *const kPrefShowLineNumbers    = @"showLineNumbers";
+NSString *const kPrefShowIndentGuides   = @"showIndentGuides";
 NSString *const kPrefWordWrap           = @"wordWrap";       // persistent across launches; default NO
 NSString *const kPrefHighlightCurrentLine = @"highlightCurrentLine";
 NSString *const kPrefEOLType            = @"eolType";       // 0=CRLF 1=LF 2=CR
@@ -24,6 +25,10 @@ NSString *const kPrefAutoCompleteEnable  = @"autoCompleteEnable";
 NSString *const kPrefAutoCompleteMinChars = @"autoCompleteMinChars";
 NSString *const kPrefAutoCloseBrackets   = @"autoCloseBrackets";
 NSString *const kPrefShowFullPathInTitle = @"showFullPathInTitle";
+NSString *const kPrefToolbarColorMode    = @"toolbarColorMode";
+NSString *const kPrefToolbarColorChoice  = @"toolbarColorChoice";
+NSString *const kPrefToolbarCustomColor  = @"toolbarCustomColor";
+NSString *const kPrefToolbarColorPlugins = @"toolbarColorPlugins";
 NSString *const kPrefCaretWidth          = @"caretWidth";
 NSString *const kPrefTabMaxLabelWidth    = @"tabMaxLabelWidth";
 NSString *const kPrefTabCloseButton      = @"tabCloseButton";
@@ -129,6 +134,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         kPrefAutoIndent:         @1,   // 0=None 1=Advanced 2=Basic
         kPrefBackspaceUnindent:  @NO,
         kPrefShowLineNumbers:    @YES,
+        kPrefShowIndentGuides:   @YES,
         kPrefWordWrap:           @NO,   // persistent default (was session-only, now persistent)
         kPrefHighlightCurrentLine: @YES,
         kPrefEOLType:            @1,
@@ -152,7 +158,10 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         kPrefAutoCompleteEnable:   @YES,
         kPrefAutoCompleteMinChars: @1,
         kPrefAutoCloseBrackets:    @YES,
-        kPrefShowFullPathInTitle:  @NO,
+        kPrefShowFullPathInTitle:  @YES,
+        kPrefToolbarColorMode:     @0,
+        kPrefToolbarColorChoice:   @2,
+        kPrefToolbarColorPlugins:  @NO,
         kPrefCaretWidth:           @1,
         kPrefTabMaxLabelWidth:     @190,
         kPrefTabCloseButton:       @YES,
@@ -260,6 +269,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
     // Rebuild sidebar page names with new translations
     _pageNames = [NSMutableArray arrayWithArray:@[
         [loc translate:@"General"],
+        [loc translate:@"Toolbar"],
         [loc translate:@"Editor"],
         [loc translate:@"Indentation"],
         [loc translate:@"Tab Bar"],
@@ -289,6 +299,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         kPrefAutoIndent:         @1,   // 0=None 1=Advanced 2=Basic
         kPrefBackspaceUnindent:  @NO,
         kPrefShowLineNumbers:    @YES,
+        kPrefShowIndentGuides:   @YES,
         kPrefWordWrap:           @NO,   // persistent default (was session-only, now persistent)
         kPrefHighlightCurrentLine: @YES,
         kPrefEOLType:            @1,
@@ -309,6 +320,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
     // ── Page names (sidebar rows) ────────────────────────────────────────────
     _pageNames = [NSMutableArray arrayWithArray:@[
         [[NppLocalizer shared] translate:@"General"],
+        [[NppLocalizer shared] translate:@"Toolbar"],
         [[NppLocalizer shared] translate:@"Editor"],
         [[NppLocalizer shared] translate:@"Indentation"],
         [[NppLocalizer shared] translate:@"Tab Bar"],
@@ -541,6 +553,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
 - (NSView *)_buildPageForName:(NSString *)name {
     NppLocalizer *loc = [NppLocalizer shared];
     if ([name isEqualToString:[loc translate:@"General"]])         return [self _buildGeneralPage];
+    if ([name isEqualToString:[loc translate:@"Toolbar"]])         return [self _buildToolbarPage];
     if ([name isEqualToString:[loc translate:@"Editor"]])          return [self _buildEditorPage];
     if ([name isEqualToString:[loc translate:@"Indentation"]])    return [self _buildIndentationPage];
     if ([name isEqualToString:[loc translate:@"Tab Bar"]])         return [self _buildTabBarPage];
@@ -627,6 +640,111 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
     [v addSubview:showSB];
 
     return v;
+}
+
+#pragma mark - Toolbar Page
+
+- (NSView *)_buildToolbarPage {
+    NSView *v = [[NSView alloc] init];
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NppLocalizer *loc = [NppLocalizer shared];
+    CGFloat y = 380;
+
+    NSInteger mode   = [ud integerForKey:kPrefToolbarColorMode];
+    NSInteger choice = [ud integerForKey:kPrefToolbarColorChoice];
+
+    // ── Colorization (radio: Off / Partial / Complete) ──
+    NSTextField *s1 = [NSTextField labelWithString:[loc translate:@"Colorization"]];
+    s1.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+    s1.frame = NSMakeRect(20, y, 320, 20); [v addSubview:s1];
+    y -= 28;
+
+    NSArray *modes = @[ @[[loc translate:@"Off"], @0],
+                        @[[loc translate:@"Partial (recolor accents only)"], @1],
+                        @[[loc translate:@"Complete (recolor entire icon)"], @2] ];
+    for (NSArray *m in modes) {
+        NSButton *r = [NSButton radioButtonWithTitle:m[0] target:self
+                                              action:@selector(_toolbarColorModeChanged:)];
+        r.tag = [m[1] integerValue];
+        r.frame = NSMakeRect(30, y, 360, 20);
+        r.state = (mode == r.tag) ? NSControlStateValueOn : NSControlStateValueOff;
+        [v addSubview:r];
+        y -= 24;
+    }
+    y -= 14;
+
+    // ── Color choice (two columns of radios + custom well) ──
+    NSTextField *s2 = [NSTextField labelWithString:[loc translate:@"Color"]];
+    s2.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+    s2.frame = NSMakeRect(20, y, 320, 20); [v addSubview:s2];
+    y -= 26;
+
+    NSArray *colors = @[ [loc translate:@"Red"], [loc translate:@"Green"], [loc translate:@"Blue"],
+                         [loc translate:@"Purple"], [loc translate:@"Cyan"], [loc translate:@"Olive"],
+                         [loc translate:@"Yellow"], [loc translate:@"System Accent"], [loc translate:@"Custom"] ];
+    CGFloat colY = y;
+    for (NSInteger i = 0; i < (NSInteger)colors.count; i++) {
+        NSButton *r = [NSButton radioButtonWithTitle:colors[i] target:self
+                                              action:@selector(_toolbarColorChoiceChanged:)];
+        r.tag = i;
+        BOOL left = (i < 5);
+        CGFloat x  = left ? 30 : 210;
+        CGFloat ry = left ? (colY - i * 24) : (colY - (i - 5) * 24);
+        r.frame = NSMakeRect(x, ry, 170, 20);
+        r.state = (choice == i) ? NSControlStateValueOn : NSControlStateValueOff;
+        [v addSubview:r];
+    }
+
+    // Custom color well — aligned with the "Custom" radio (right column, row 3).
+    NSColorWell *well = [[NSColorWell alloc] initWithFrame:NSMakeRect(380, colY - 3 * 24 - 1, 44, 22)];
+    NSData *cd = [ud dataForKey:kPrefToolbarCustomColor];
+    NSColor *cc = cd ? [NSKeyedUnarchiver unarchivedObjectOfClass:[NSColor class] fromData:cd error:nil] : nil;
+    well.color  = cc ?: [NSColor systemBlueColor];
+    well.target = self;
+    well.action = @selector(_toolbarCustomColorChanged:);
+    [v addSubview:well];
+
+    y = colY - 5 * 24 - 18;
+
+    // ── Plugins ──
+    NSButton *plug = [NSButton checkboxWithTitle:[loc translate:@"Apply to plugin toolbar icons"]
+                                          target:self action:@selector(_toolbarColorPluginsChanged:)];
+    plug.frame = NSMakeRect(20, y, 400, 20);
+    plug.state = [ud boolForKey:kPrefToolbarColorPlugins] ? NSControlStateValueOn : NSControlStateValueOff;
+    [v addSubview:plug];
+    y -= 24;
+
+    NSTextField *note = [NSTextField wrappingLabelWithString:
+        [loc translate:@"In Complete mode plugin icons become a single solid color."]];
+    note.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    note.textColor = NSColor.secondaryLabelColor;
+    note.frame = NSMakeRect(38, y - 18, 400, 34);
+    [v addSubview:note];
+
+    return v;
+}
+
+- (void)_toolbarColorModeChanged:(NSButton *)sender {
+    [[NSUserDefaults standardUserDefaults] setInteger:sender.tag forKey:kPrefToolbarColorMode];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"NPPToolbarColorChanged" object:nil];
+}
+
+- (void)_toolbarColorChoiceChanged:(NSButton *)sender {
+    [[NSUserDefaults standardUserDefaults] setInteger:sender.tag forKey:kPrefToolbarColorChoice];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"NPPToolbarColorChanged" object:nil];
+}
+
+- (void)_toolbarCustomColorChanged:(NSColorWell *)sender {
+    NSData *d = [NSKeyedArchiver archivedDataWithRootObject:sender.color
+                                     requiringSecureCoding:YES error:nil];
+    if (d) [[NSUserDefaults standardUserDefaults] setObject:d forKey:kPrefToolbarCustomColor];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"NPPToolbarColorChanged" object:nil];
+}
+
+- (void)_toolbarColorPluginsChanged:(NSButton *)sender {
+    [[NSUserDefaults standardUserDefaults] setBool:(sender.state == NSControlStateValueOn)
+                                            forKey:kPrefToolbarColorPlugins];
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"NPPToolbarColorChanged" object:nil];
 }
 
 #pragma mark - Editor Page

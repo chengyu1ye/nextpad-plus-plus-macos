@@ -99,10 +99,13 @@ static FindWindow *_sharedInstance = nil;
 - (instancetype)init {
     NSWindow *win = [[NSWindow alloc]
         initWithContentRect:NSMakeRect(0, 0, kWinW, 355)
-                  styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable)
+                  styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
                     backing:NSBackingStoreBuffered defer:NO];
     win.title = [[NppLocalizer shared] translate:@"Find"];
-    win.minSize = NSMakeSize(540, 300);
+    // Issue #120 — let Tab / Shift+Tab cycle the form controls. AppKit
+    // builds and maintains the key-view loop automatically, including
+    // across tab switches that re-parent the shared combo boxes.
+    win.autorecalculatesKeyViewLoop = YES;
     [win center];
 
     self = [super initWithWindow:win];

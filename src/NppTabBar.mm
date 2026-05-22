@@ -404,6 +404,13 @@ static const CGFloat kPinSize = 11.0; // pin icon drawn at ~80% of original ~14p
     return self;
 }
 
+- (void)dealloc {
+    // Pair the addObserver: in init so a torn-down tab bar can never
+    // leave a dangling pointer in CoreFoundation's observer list — the
+    // signature of the long-session crash in incident 647E563D / 18618486.
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
 - (void)_darkModeChanged:(NSNotification *)n {
     // Redraw all tabs and the bar itself with updated theme colors
     for (_NppTabItem *item in _items)

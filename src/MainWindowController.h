@@ -74,6 +74,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// host.  Returns NO for nil.
 - (BOOL)isPluginPanelShown:(nullable NSView *)panel;
 
+/// Re-open the built-in side panels that were open at last quit (issue
+/// #132). Gated on the "Remember panel visibility" preference. Call once,
+/// on the primary window only, after it has been shown.
+- (void)restoreSidePanels;
+
 @end
 
 /// Write current NSUserDefaults preferences to ~/.nextpad++/config.xml.

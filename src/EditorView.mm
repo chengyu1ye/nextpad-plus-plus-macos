@@ -646,6 +646,19 @@ static NSUInteger nppLargeFileThreshold(void) {
     // without this every line would show as orange immediately after file open.
     [_scintillaView message:SCI_SETSAVEPOINT];
 
+    // Issue #111 — the full-file SCI_ADDTEXT above was recorded into the
+    // change-history object while it was live, and SCI_EMPTYUNDOBUFFER then
+    // emptied the undo history without resetting that object, leaving it
+    // inconsistent so later edits no longer register as modifications (no
+    // orange marker). Disable + re-enable frees the stale object and
+    // rebuilds a fresh one on the loaded content as the clean baseline —
+    // the undo buffer is already empty here, which ChangeHistorySet requires.
+    // Marker styles set in applyDefaultTheme live in the ViewStyle and are
+    // unaffected by toggling change history.
+    [_scintillaView message:SCI_SETCHANGEHISTORY wParam:SC_CHANGE_HISTORY_DISABLED];
+    [_scintillaView message:SCI_SETCHANGEHISTORY
+                     wParam:SC_CHANGE_HISTORY_ENABLED | SC_CHANGE_HISTORY_MARKERS];
+
     // SCI_SETWORDCHARS is per-document; Phase 2 always swaps to a fresh doc
     // on each load, so re-apply the user's word-char preference here (issue #42).
     [self applyWordCharsFromDefaults];
@@ -954,8 +967,32 @@ static NSUInteger nppLargeFileThreshold(void) {
     _externalChangePending = YES;
 
     if (_monitoringMode) {
+        ScintillaView *sci = _scintillaView;
+        // Preserve the caret (line + column) and the scroll position across
+        // the reload. loadFileAtPath: resets the caret to position 0, which
+        // would otherwise snap a monitored (tail -f) view back to the top on
+        // every external change.
+        sptr_t savedPos          = [sci message:SCI_GETCURRENTPOS];
+        sptr_t savedLine         = [sci message:SCI_LINEFROMPOSITION wParam:(uptr_t)savedPos];
+        sptr_t savedColumn       = [sci message:SCI_GETCOLUMN wParam:(uptr_t)savedPos];
+        sptr_t savedFirstVisible = [sci message:SCI_GETFIRSTVISIBLELINE];
+
         NSError *err;
         [self loadFileAtPath:_filePath error:&err];
+
+        // Clamp to the reloaded file's bounds — guards the case where the
+        // file shrank and the old caret line no longer exists. SCI_FINDCOLUMN
+        // clamps the column to the target line's length on its own.
+        sptr_t lineCount  = [sci message:SCI_GETLINECOUNT];
+        sptr_t targetLine = MIN(savedLine, lineCount - 1);
+        sptr_t targetPos  = [sci message:SCI_FINDCOLUMN
+                                   wParam:(uptr_t)targetLine
+                                   lParam:(sptr_t)savedColumn];
+        [sci message:SCI_GOTOPOS wParam:(uptr_t)targetPos];
+        // Restore the viewport last so it wins over GOTOPOS's scroll-to-caret.
+        [sci message:SCI_SETFIRSTVISIBLELINE
+                wParam:(uptr_t)MIN(savedFirstVisible, lineCount - 1)];
+
         _externalChangePending = NO;
         return;
     }
@@ -1476,8 +1513,9 @@ static NSColor *nppColorFromHex(NSString *hex) {
     if (gsWhiteSpace.fgColor)
         [sci message:SCI_SETWHITESPACEFORE wParam:1 lParam:sciColor(gsWhiteSpace.fgColor)];
 
-    // Indentation guides
-    [sci message:SCI_SETINDENTATIONGUIDES wParam:SC_IV_LOOKBOTH];
+    // Indentation guides — honour the persisted kPrefShowIndentGuides toggle.
+    BOOL showGuides = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefShowIndentGuides];
+    [sci message:SCI_SETINDENTATIONGUIDES wParam:(showGuides ? SC_IV_LOOKBOTH : SC_IV_NONE)];
     [sci message:SCI_SETEOLMODE wParam:SC_EOL_LF];
     NPPStyleEntry *gsIndent = [store globalStyleNamed:@"Indent guideline style"];
     if (gsIndent.fgColor) [sci setColorProperty:SCI_STYLESETFORE parameter:37 value:gsIndent.fgColor];
@@ -1506,6 +1544,13 @@ static NSColor *nppColorFromHex(NSString *hex) {
     [sci message:SCI_AUTOCSETDROPRESTOFWORD wParam:0];
     [sci message:SCI_AUTOCSETMAXHEIGHT     wParam:10];
     [sci message:SCI_AUTOCSETMAXWIDTH      wParam:40];
+
+    // Issue #111 — track the widest displayed line so the horizontal
+    // scrollbar can reach the end of long lines. Without tracking the
+    // scroll width only grows where the caret has been, so a freshly
+    // loaded file's long lines (caret never visited) stay partly
+    // unreachable.
+    [sci message:SCI_SETSCROLLWIDTHTRACKING wParam:1];
 
     // ── Change-history bar (margin 2, 2 px) ──────────────────────────────────
     // When SC_CHANGE_HISTORY_MARKERS is enabled Scintilla auto-assigns default
@@ -2035,6 +2080,11 @@ static int vkToScintillaKey(int vk) {
 
     BOOL hlLine = [ud boolForKey:kPrefHighlightCurrentLine];
     [sci message:SCI_SETCARETLINEVISIBLE wParam:hlLine ? 1 : 0];
+
+    // Indentation guides — persisted toggle; the NPPPreferencesChanged
+    // path re-runs this method on every editor when the toggle flips.
+    BOOL showGuides = [ud boolForKey:kPrefShowIndentGuides];
+    [sci message:SCI_SETINDENTATIONGUIDES wParam:(showGuides ? SC_IV_LOOKBOTH : SC_IV_NONE)];
 
     // Word wrap — persistent across launches. Read kPrefWordWrap so new
     // tabs inherit the saved state on creation. Toggling via toolbar/menu
@@ -3287,8 +3337,16 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
         // ── Recorded format: menu command by selector name ──
         NSString *menuCmd = action[@"menuCommand"];
         if (menuCmd) {
-            SEL sel = NSSelectorFromString(menuCmd);
-            [NSApp sendAction:sel to:nil from:self];
+            NSNumber *pluginCmdID = action[@"pluginCmdID"];
+            if (pluginCmdID && [menuCmd isEqualToString:@"pluginMenuAction:"]) {
+                // Plugin commands share one selector (pluginMenuAction:); the
+                // responder-chain sendAction: can't pick the right one, so
+                // dispatch the recorded cmdID directly.
+                [[NppPluginManager shared] runPluginCommandWithID:(int)pluginCmdID.integerValue];
+            } else {
+                SEL sel = NSSelectorFromString(menuCmd);
+                [NSApp sendAction:sel to:nil from:self];
+            }
             continue;
         }
 
@@ -3304,8 +3362,14 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
             if (type == 2) {
                 // Menu command: sParam = macOS selector name
                 if (sParam.length) {
-                    SEL menuAction = NSSelectorFromString(sParam);
-                    [NSApp sendAction:menuAction to:nil from:self];
+                    if (wp != 0 && [sParam isEqualToString:@"pluginMenuAction:"]) {
+                        // Plugin command: cmdID stored in wParam (see
+                        // convertRecordedToXmlFormat). Dispatch it directly.
+                        [[NppPluginManager shared] runPluginCommandWithID:(int)wp];
+                    } else {
+                        SEL menuAction = NSSelectorFromString(sParam);
+                        [NSApp sendAction:menuAction to:nil from:self];
+                    }
                 }
             } else if (type == 1 && sParam.length > 0) {
                 [sci message:(uint32_t)msg wParam:(uptr_t)wp lParam:(sptr_t)sParam.UTF8String];
@@ -3345,11 +3409,20 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
 }
 
 - (void)recordMenuCommand:(NSString *)selectorName {
+    [self recordMenuCommand:selectorName pluginCmdID:0];
+}
+
+- (void)recordMenuCommand:(NSString *)selectorName pluginCmdID:(NSInteger)cmdID {
     if (!_isRecordingMacro || !selectorName.length) return;
-    [_macroActions addObject:@{
-        @"menuCommand": selectorName,  // type 2: menu command by selector name
-    }];
-    NSLog(@"[Macro] Recorded menu command: %@", selectorName);
+    NSMutableDictionary *step = [NSMutableDictionary dictionaryWithObject:selectorName
+                                                                  forKey:@"menuCommand"];
+    // Plugin command IDs start at 22000 (see NppPluginManager); 0 means "not a
+    // plugin command". Stored so playback can dispatch the exact command rather
+    // than the broken shared-selector sendAction: path.
+    if (cmdID != 0) step[@"pluginCmdID"] = @(cmdID);
+    [_macroActions addObject:step];
+    NSLog(@"[Macro] Recorded menu command: %@%@", selectorName,
+          cmdID != 0 ? [NSString stringWithFormat:@" (plugin cmdID %ld)", (long)cmdID] : @"");
 }
 
 - (void)runMacro {
@@ -3361,8 +3434,13 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
         // Type 2: menu command by selector name
         NSString *menuCmd = action[@"menuCommand"];
         if (menuCmd) {
-            SEL sel = NSSelectorFromString(menuCmd);
-            [NSApp sendAction:sel to:nil from:self];
+            NSNumber *pluginCmdID = action[@"pluginCmdID"];
+            if (pluginCmdID && [menuCmd isEqualToString:@"pluginMenuAction:"]) {
+                [[NppPluginManager shared] runPluginCommandWithID:(int)pluginCmdID.integerValue];
+            } else {
+                SEL sel = NSSelectorFromString(menuCmd);
+                [NSApp sendAction:sel to:nil from:self];
+            }
             continue;
         }
         // Type 0/1: Scintilla message
@@ -3702,9 +3780,15 @@ static NSSet<NSString *> *_cLikeLanguages() {
         unsigned int code = notification->nmhdr.code;
         BOOL isMacroActive = _isRecordingMacro ||
                              [(NppApplication *)NSApp playingBackMacro];
+        // SCN_DWELLSTART / SCN_DWELLEND let plugins show hover calltips.
+        // Scintilla only raises them once a plugin arms the dwell timer
+        // itself via SCI_SETMOUSEDWELLTIME — the host leaves it unset
+        // (default TimeForever), so there is no cost for sessions with no
+        // dwell-consuming plugin.
         if (code == SCN_CHARADDED || code == SCN_MODIFIED ||
             code == SCN_AUTOCSELECTION || code == SCN_AUTOCCANCELLED ||
-            code == SCN_UPDATEUI || code == SCN_PAINTED) {
+            code == SCN_UPDATEUI || code == SCN_PAINTED ||
+            code == SCN_DWELLSTART || code == SCN_DWELLEND) {
             if (!isMacroActive) {
                 [[NppPluginManager shared] forwardScintillaNotification:notification];
             } else if (_isRecordingMacro) {

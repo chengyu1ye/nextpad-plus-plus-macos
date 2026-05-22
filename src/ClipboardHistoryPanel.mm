@@ -33,6 +33,14 @@ static const NSUInteger kMaxHistory = 30;
     return [self initWithFrame:NSZeroRect];
 }
 
+- (void)dealloc {
+    // Pair the addObserver: in initWithFrame: so a torn-down panel can
+    // never leave a dangling pointer in CoreFoundation's observer list —
+    // the signature of the long-session crash in incident
+    // 647E563D / 18618486.
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
+
 - (void)_buildLayout {
     _scrollView = [[NSScrollView alloc] init];
     NSScrollView *scroll = _scrollView;

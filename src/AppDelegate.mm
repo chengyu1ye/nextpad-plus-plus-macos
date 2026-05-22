@@ -11,6 +11,13 @@
 #import "NppLangsManager.h"
 #import "EditorView.h"
 
+// Files opened from a folder beyond this count trigger a confirmation.
+static const NSUInteger kFolderOpenConfirmThreshold = 20;
+
+@interface AppDelegate ()
+- (NSArray<NSString *> *)_expandFolderArguments:(NSArray<NSString *> *)paths;
+@end
+
 @implementation AppDelegate {
     NSMutableArray<NSString *> *_pendingFilePaths;
     BOOL _didFinishLaunching;
@@ -157,6 +164,17 @@
         #pragma clang diagnostic pop
     }
 
+    // Re-open side panels that were open last quit (issue #132). Primary
+    // window only — secondary windows from Window > New Window must not
+    // inherit the restore. Deferred onto the main queue so it runs AFTER
+    // the side-panel collapse block that buildContentView enqueues during
+    // -init: that block was enqueued first, so FIFO ordering guarantees
+    // the collapse runs before this restore. Calling restore synchronously
+    // here would let the later-running collapse re-hide the panels.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.mainWindowController restoreSidePanels];
+    });
+
     // ── Plugins ─────────────────────────────────────────────────────────
 
     if (!cli.noPlugin) {
@@ -224,16 +242,17 @@
     // ── Mark launch complete and process any pending file-open requests ────
     _didFinishLaunching = YES;
     if (_pendingFilePaths.count > 0) {
-        for (NSString *path in _pendingFilePaths) {
+        NSArray<NSString *> *files = [self _expandFolderArguments:_pendingFilePaths];
+        [_pendingFilePaths removeAllObjects];
+        for (NSString *path in files) {
             [self.mainWindowController openFileAtPath:path];
         }
-        [_pendingFilePaths removeAllObjects];
         // Files queued during launch mean the user explicitly asked us to
         // open something. NSApplication usually foregrounds a launching
         // app naturally, but state restoration can leave the window
         // miniaturized — call the helper so the freshly-loaded files are
         // actually visible (issue #63).
-        [self.mainWindowController bringWindowForward];
+        if (files.count > 0) [self.mainWindowController bringWindowForward];
     }
 
     // ── Initial keyboard focus to the active editor (issue #34) ─────────
@@ -283,6 +302,52 @@
     return mwc;
 }
 
+// ── Folder argument expansion ────────────────────────────────────────────────
+
+// Expands any directory in `paths` to its TOP-LEVEL regular files. There
+// is no recursion: subdirectories and hidden entries (dotfiles) are
+// skipped. Plain file paths — and non-existent paths — pass through
+// unchanged so the opener keeps its existing behaviour. If expanding a
+// folder pushes the total file count past kFolderOpenConfirmThreshold the
+// user is asked once; returns nil if they decline.
+- (NSArray<NSString *> *)_expandFolderArguments:(NSArray<NSString *> *)paths {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray<NSString *> *result = [NSMutableArray array];
+    BOOL anyFolderExpanded = NO;
+
+    for (NSString *path in paths) {
+        BOOL isDir = NO;
+        if (![fm fileExistsAtPath:path isDirectory:&isDir] || !isDir) {
+            [result addObject:path];
+            continue;
+        }
+        anyFolderExpanded = YES;
+        NSArray<NSString *> *entries =
+            [[fm contentsOfDirectoryAtPath:path error:nil]
+                sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+        for (NSString *name in entries) {
+            if ([name hasPrefix:@"."]) continue;            // skip hidden
+            NSString *full = [path stringByAppendingPathComponent:name];
+            BOOL childIsDir = NO;
+            [fm fileExistsAtPath:full isDirectory:&childIsDir];
+            if (childIsDir) continue;                       // skip subfolders
+            [result addObject:full];
+        }
+    }
+
+    if (anyFolderExpanded && result.count > kFolderOpenConfirmThreshold) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [[NppLocalizer shared] translate:@"Open all files in folder?"];
+        alert.informativeText = [NSString stringWithFormat:
+            [[NppLocalizer shared] translate:@"This will open %lu files in new tabs."],
+            (unsigned long)result.count];
+        [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Open"]];
+        [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+        if ([alert runModal] != NSAlertFirstButtonReturn) return nil;
+    }
+    return result;
+}
+
 // ── Open files from CLI ─────────────────────────────────────────────────────
 
 - (void)_openFilesFromCLI:(NppCommandLineParams *)cli inController:(MainWindowController *)mwc {
@@ -311,6 +376,18 @@
                     [mwc openFileAtPath:fullPath];
                     lastEditor = [mwc currentEditor];
                 }
+            }
+            continue;
+        }
+
+        if (isDir) {
+            // Bare folder (no -r / -openFoldersAsWorkspace): open its
+            // top-level files — same behaviour as a folder handed to an
+            // already-running instance (issue #131).
+            NSArray<NSString *> *folderFiles = [self _expandFolderArguments:@[path]];
+            for (NSString *folderFile in folderFiles) {
+                [mwc openFileAtPath:folderFile];
+                lastEditor = [mwc currentEditor];
             }
             continue;
         }
@@ -373,8 +450,13 @@
         [_pendingFilePaths addObject:filename];
         return YES;
     }
+    // A folder argument expands to its top-level files (issue #131).
+    NSArray<NSString *> *files = [self _expandFolderArguments:@[filename]];
+    if (files.count == 0) return YES;  // empty folder, or large-open declined
     MainWindowController *mwc = [self _activeWindowController];
-    [mwc openFileAtPath:filename];
+    for (NSString *path in files) {
+        [mwc openFileAtPath:path];
+    }
     // Issue #63: surface the window to the user. Without this, opening a
     // file from Finder while the app is minimized silently adds the file
     // to a tab inside an invisible window and the user has to hunt for
@@ -389,14 +471,18 @@
         [sender replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
         return;
     }
-    MainWindowController *mwc = [self _activeWindowController];
-    for (NSString *path in filenames) {
-        [mwc openFileAtPath:path];
+    // Folder arguments expand to their top-level files (issue #131).
+    NSArray<NSString *> *files = [self _expandFolderArguments:filenames];
+    if (files.count > 0) {
+        MainWindowController *mwc = [self _activeWindowController];
+        for (NSString *path in files) {
+            [mwc openFileAtPath:path];
+        }
+        // Issue #63: bring the window forward AFTER all files are added so
+        // there's no flicker between batches and the front-most tab is the
+        // last one opened (the standard macOS behaviour for multi-file open).
+        [mwc bringWindowForward];
     }
-    // Issue #63: bring the window forward AFTER all files are added so
-    // there's no flicker between batches and the front-most tab is the
-    // last one opened (the standard macOS behaviour for multi-file open).
-    [mwc bringWindowForward];
     [sender replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
 }
 

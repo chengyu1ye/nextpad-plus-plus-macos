@@ -476,13 +476,29 @@ static sptr_t _srSciColor(NSColor *c) {
     if (optLabel.length) suffix = [NSString stringWithFormat:@" [%@: %@]", modeLabel, optLabel];
     else suffix = [NSString stringWithFormat:@" [%@]", modeLabel];
 
+    // Timestamp (date + time to the second) appended at the end of the
+    // search-header line. The lexer classifies a line solely by its first
+    // character, so trailing content is safe.
+    static NSDateFormatter *tsFormatter;
+    static dispatch_once_t tsOnce;
+    dispatch_once(&tsOnce, ^{
+        tsFormatter = [[NSDateFormatter alloc] init];
+        // Fixed locale so the 12-hour clock and the AM/PM marker are
+        // deterministic regardless of the user's region settings.
+        tsFormatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        tsFormatter.dateFormat = @"yyyy-MM-dd hh:mm:ss a";
+    });
+    // Lowercase so the marker reads "am" / "pm".
+    NSString *timestamp = [[tsFormatter stringFromDate:[NSDate date]] lowercaseString];
+
     // Search header
-    NSString *header = [NSString stringWithFormat:@"Search \"%@\" (%ld hit%@ in %ld file%@ of %ld searched)%@\n",
+    NSString *header = [NSString stringWithFormat:@"Search \"%@\" (%ld hit%@ in %ld file%@ of %ld searched)%@  %@\n",
         searchText,
         (long)totalHits, totalHits == 1 ? @"" : @"s",
         (long)fileResults.count, fileResults.count == 1 ? @"" : @"s",
         (long)filesSearched,
-        suffix];
+        suffix,
+        timestamp];
 
     sptr_t startPos = [_sci message:SCI_GETLENGTH];
     // SCI_APPENDTEXT wParam is the UTF-8 BYTE count, not the NSString character
