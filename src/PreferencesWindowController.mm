@@ -3,6 +3,11 @@
 #import "NppLangsManager.h"
 #import "NppThemeManager.h"
 #import "StyleConfiguratorWindowController.h"
+#import "TahoeToolbarConfig.h"
+
+// Defined in regex/RegexBackendSelect.cxx — selects the Boost.Regex backend over
+// the default per-line std::regex one. Mirrored from kPrefUseBoostRegex.
+extern "C" bool gNppUseBoostRegex;
 
 // ── NSUserDefaults keys (mirrors NPP settings) ────────────────────────────────
 NSString *const kPrefTabWidth           = @"tabWidth";
@@ -34,14 +39,39 @@ NSString *const kPrefTabMaxLabelWidth    = @"tabMaxLabelWidth";
 NSString *const kPrefTabCloseButton      = @"tabCloseButton";
 NSString *const kPrefDoubleClickTabClose = @"doubleClickTabClose";
 NSString *const kPrefTabBarWrap          = @"tabBarWrap";
+NSString *const kPrefHideTabBar          = @"hideTabBar";
 NSString *const kPrefVirtualSpace        = @"virtualSpace";
+NSString *const kPrefColumnSel2MultiEdit = @"columnSel2MultiEdit";
 NSString *const kPrefScrollBeyondLastLine= @"scrollBeyondLastLine";
+NSString *const kPrefScrollSpeedGain     = @"scrollSpeedGain";
 NSString *const kPrefCaretBlinkRate      = @"caretBlinkRate";
 NSString *const kPrefFontQuality         = @"fontQuality";
+NSString *const kPrefLineHeightMultiplier = @"lineHeightMultiplier";
+NSString *const kPrefGlobalOverrideEnableFg        = @"globalOverrideEnableFg";
+NSString *const kPrefGlobalOverrideEnableBg        = @"globalOverrideEnableBg";
+NSString *const kPrefGlobalOverrideEnableFont      = @"globalOverrideEnableFont";
+NSString *const kPrefGlobalOverrideEnableFontSize  = @"globalOverrideEnableFontSize";
+NSString *const kPrefGlobalOverrideEnableBold      = @"globalOverrideEnableBold";
+NSString *const kPrefGlobalOverrideEnableItalic    = @"globalOverrideEnableItalic";
+NSString *const kPrefGlobalOverrideEnableUnderline = @"globalOverrideEnableUnderline";
 NSString *const kPrefCopyLineNoSelection = @"copyLineNoSelection";
 NSString *const kPrefSmartHighlight      = @"smartHighlight";
 NSString *const kPrefFillFindWithSelection = @"fillFindWithSelection";
 NSString *const kPrefFuncParamsHint      = @"funcParamsHint";
+NSString *const kPrefFindTransparencyEnabled = @"findTransparencyEnabled";
+NSString *const kPrefFindTransparencyMode    = @"findTransparencyMode";   // 0=losing focus, 1=always
+NSString *const kPrefFindTransparencyAlpha   = @"findTransparencyAlpha";
+NSString *const kPrefClickableLinkEnable      = @"clickableLinkEnable";
+NSString *const kPrefClickableLinkNoUnderline = @"clickableLinkNoUnderline";
+NSString *const kPrefClickableLinkFullBox     = @"clickableLinkFullBox";
+NSString *const kPrefClickableLinkSchemes     = @"clickableLinkSchemes";
+
+// Windows NppGUI._uriSchemes default (Parameters.h) — the customized URI
+// schemes that should also be treated as clickable links.
+static NSString *const kDefaultClickableLinkSchemes =
+    @"svn:// cvs:// git:// imap:// irc:// irc6:// ircs:// ldap:// ldaps:// news: "
+    @"telnet:// gopher:// ssh:// sftp:// smb:// skype: snmp:// spotify: steam:// "
+    @"sms: slack:// chrome:// bitcoin:";
 NSString *const kPrefShowStatusBar       = @"showStatusBar";
 NSString *const kPrefMuteSounds          = @"muteSounds";
 NSString *const kPrefSaveAllConfirm      = @"saveAllConfirm";
@@ -51,6 +81,7 @@ NSString *const kPrefDisableTextDragDrop = @"disableTextDragDrop";
 NSString *const kPrefMonoFontFind        = @"monoFontFind";
 NSString *const kPrefConfirmReplaceAll   = @"confirmReplaceAll";
 NSString *const kPrefReplaceAndStop      = @"replaceAndStop";
+NSString *const kPrefUseBoostRegex       = @"useBoostRegex";
 NSString *const kPrefSmartHiliteCase     = @"smartHiliteCase";
 NSString *const kPrefSmartHiliteWord     = @"smartHiliteWord";
 NSString *const kPrefDateTimeReverse     = @"dateTimeReverse";
@@ -68,6 +99,8 @@ NSString *const kPrefLineNumDynWidth     = @"lineNumDynWidth";
 NSString *const kPrefInSelThreshold      = @"inSelThreshold";
 NSString *const kPrefFuncListUseXML      = @"funcListUseXML";
 NSString *const kPrefToolbarIconScale    = @"toolbarIconScale";
+NSString *const kPrefFileStatusAutoDetection  = @"fileStatusAutoDetection";
+NSString *const kPrefFileStatusUpdateSilently = @"fileStatusUpdateSilently";
 
 // Delimiter pane (issue #42)
 NSString *const kPrefWordCharsUseDefault = @"wordCharsUseDefault";
@@ -111,13 +144,16 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
 
 // ── PreferencesWindowController ───────────────────────────────────────────────
 
-@interface PreferencesWindowController () <NSTableViewDataSource, NSTableViewDelegate>
+@interface PreferencesWindowController () <NSTableViewDataSource, NSTableViewDelegate, NSTextViewDelegate, NSOutlineViewDataSource, NSOutlineViewDelegate>
 @end
 
 @implementation PreferencesWindowController {
     NSTableView          *_sidebarTable;
     NSScrollView         *_contentScroll;
     NSView               *_contentArea;
+    // Tahoe toolbar group editor (Toolbar page, gated on the Tahoe appearance).
+    NSOutlineView        *_tahoeOutline;
+    NSMutableArray       *_tahoeEditGroups; // [ @{label,kind,items:[ @{key,display,state} ]} ]
     NSMutableArray       *_pageNames;     // sidebar row titles (NSString or @"-" for separator)
     NSMutableDictionary  *_pageViews;     // pageTitle → NSView (lazy cache)
     NSPopUpButton        *_languagePopup; // General page — language selector
@@ -125,6 +161,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
     NSDictionary<NSString *, NSString *> *_indentDisplayToInternal; // "Python" → "python"
     NSString             *_indentSelectedLang; // currently selected internal lang name (nil = [Default])
     NSTextField          *_delimWordCharsField; // Delimiter page — toggled enabled by radio
+    NSTextView           *_clickableSchemesTextView; // Cloud & Link page — URI customized schemes
 }
 
 + (void)load {
@@ -167,14 +204,33 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         kPrefTabCloseButton:       @YES,
         kPrefDoubleClickTabClose:  @NO,
         kPrefTabBarWrap:           @NO,
+        kPrefHideTabBar:           @NO,
         kPrefVirtualSpace:         @NO,
+        kPrefColumnSel2MultiEdit:  @YES,
         kPrefScrollBeyondLastLine: @NO,
+        kPrefScrollSpeedGain:      @1.0,
         kPrefCaretBlinkRate:       @500,
         kPrefFontQuality:          @3,   // 0=default 1=none 2=antialiased 3=LCD
+        kPrefLineHeightMultiplier: @1.0, // 1.0 = no extra spacing (current behavior)
+        kPrefGlobalOverrideEnableFg:        @NO,
+        kPrefGlobalOverrideEnableBg:        @NO,
+        kPrefGlobalOverrideEnableFont:      @NO,
+        kPrefGlobalOverrideEnableFontSize:  @NO,
+        kPrefGlobalOverrideEnableBold:      @NO,
+        kPrefGlobalOverrideEnableItalic:    @NO,
+        kPrefGlobalOverrideEnableUnderline: @NO,
         kPrefCopyLineNoSelection:  @YES,
         kPrefSmartHighlight:       @YES,
+        kPrefUseBoostRegex:        @NO,   // off = current per-line std::regex backend
         kPrefFillFindWithSelection:@YES,
         kPrefFuncParamsHint:       @NO,
+        kPrefFindTransparencyEnabled: @YES,  // matches Windows default
+        kPrefFindTransparencyMode:    @0,    // 0=on losing focus, 1=always
+        kPrefFindTransparencyAlpha:   @0.5,
+        kPrefClickableLinkEnable:      @YES, // matches Windows default (urlUnderLineFg)
+        kPrefClickableLinkNoUnderline: @NO,
+        kPrefClickableLinkFullBox:     @NO,
+        kPrefClickableLinkSchemes:     kDefaultClickableLinkSchemes,
         kPrefShowStatusBar:        @YES,
         kPrefMuteSounds:           @NO,
         kPrefSaveAllConfirm:       @NO,
@@ -201,6 +257,8 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         kPrefInSelThreshold:       @1024,
         kPrefFuncListUseXML:       @YES,
         kPrefToolbarIconScale:     @1.0,  // 0.50/0.75/0.90/1.00/1.25/1.50 — restart required
+        kPrefFileStatusAutoDetection:  @YES,
+        kPrefFileStatusUpdateSilently: @NO,
         kPrefDarkMode:             @0,   // 0=Auto, 1=Light, 2=Dark
         // Performance / Large File Restriction
         kPrefLargeFileEnabled:            @YES,
@@ -225,6 +283,9 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         [ud setBool:YES forKey:kPrefUseTabs];
         [ud setBool:YES forKey:@"_useTabsDefaultApplied"];
     }
+    // Sync the regex-backend selector flag from the saved/default preference at
+    // startup (registerDefaults above makes boolForKey valid immediately).
+    gNppUseBoostRegex = [ud boolForKey:kPrefUseBoostRegex];
 }
 
 + (instancetype)sharedController {
@@ -280,9 +341,17 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         [loc translate:@"Auto-Completion"],
         [loc translate:@"Searching"],
         [loc translate:@"Delimiter"],
+        [loc translate:@"Cloud and Link"],
         [loc translate:@"Performance"],
         [loc translate:@"MISC."],
     ]];
+    // Tahoe group: only under the Liquid Glass appearance (Classic Prefs unchanged).
+    if ([NppThemeManager shared].usesGlassMaterials) {
+        NSString *tahoe = [loc translate:@"Tahoe"];
+        NSUInteger dm = [_pageNames indexOfObject:[loc translate:@"Dark Mode"]];
+        if (dm != NSNotFound) [_pageNames insertObject:tahoe atIndex:dm + 1];
+        else [_pageNames addObject:tahoe];
+    }
     // Invalidate cached page views so they rebuild with new translations
     [_pageViews removeAllObjects];
     [_sidebarTable reloadData];
@@ -331,9 +400,17 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         [[NppLocalizer shared] translate:@"Auto-Completion"],
         [[NppLocalizer shared] translate:@"Searching"],
         [[NppLocalizer shared] translate:@"Delimiter"],
+        [[NppLocalizer shared] translate:@"Cloud and Link"],
         [[NppLocalizer shared] translate:@"Performance"],
         [[NppLocalizer shared] translate:@"MISC."],
     ]];
+    // Tahoe group: only under the Liquid Glass appearance (Classic Prefs unchanged).
+    if ([NppThemeManager shared].usesGlassMaterials) {
+        NSString *tahoe = [[NppLocalizer shared] translate:@"Tahoe"];
+        NSUInteger dm = [_pageNames indexOfObject:[[NppLocalizer shared] translate:@"Dark Mode"]];
+        if (dm != NSNotFound) [_pageNames insertObject:tahoe atIndex:dm + 1];
+        else [_pageNames addObject:tahoe];
+    }
     _pageViews = [NSMutableDictionary dictionary];
 
     // ── Sidebar (source list table view) ─────────────────────────────────────
@@ -558,12 +635,14 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
     if ([name isEqualToString:[loc translate:@"Indentation"]])    return [self _buildIndentationPage];
     if ([name isEqualToString:[loc translate:@"Tab Bar"]])         return [self _buildTabBarPage];
     if ([name isEqualToString:[loc translate:@"Dark Mode"]])       return [self _buildDarkModePage];
+    if ([name isEqualToString:[loc translate:@"Tahoe"]])           return [self _buildTahoePage];
     if ([name isEqualToString:[loc translate:@"Margins"]])          return [self _buildMarginsPage];
     if ([name isEqualToString:[loc translate:@"New Document"]])     return [self _buildNewDocPage];
     if ([name isEqualToString:[loc translate:@"Backup"]])           return [self _buildBackupPage];
     if ([name isEqualToString:[loc translate:@"Auto-Completion"]])  return [self _buildAutoCompletionPage];
     if ([name isEqualToString:[loc translate:@"Searching"]])        return [self _buildSearchingPage];
     if ([name isEqualToString:[loc translate:@"Delimiter"]])        return [self _buildDelimiterPage];
+    if ([name isEqualToString:[loc translate:@"Cloud and Link"]])     return [self _buildCloudLinkPage];
     if ([name isEqualToString:[loc translate:@"Performance"]])      return [self _buildPerformancePage];
     if ([name isEqualToString:[loc translate:@"MISC."]])            return [self _buildMiscPage];
     return nil;
@@ -724,6 +803,67 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
     return v;
 }
 
+#pragma mark - Tahoe Page (gated — Liquid Glass appearance only)
+
+// A dedicated "Tahoe" Preferences group. The sidebar row is added only under the
+// Tahoe appearance (see _pageNames build sites), so Classic Preferences is
+// unchanged. Currently hosts the toolbar group editor; future Tahoe-only settings
+// land here too.
+- (NSView *)_buildTahoePage {
+    NSView *v = [[NSView alloc] init];
+    NppLocalizer *loc = [NppLocalizer shared];
+    CGFloat y = 380;
+
+    NSTextField *th = [NSTextField labelWithString:[loc translate:@"Toolbar Groups"]];
+    th.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+    th.frame = NSMakeRect(20, y, 360, 20); [v addSubview:th];
+    y -= 26;
+
+    NSTextField *help = [NSTextField wrappingLabelWithString:[loc translate:
+        @"Choose where each button appears in the Liquid Glass toolbar: on the "
+        @"group capsule (Toolbar), in the group's ▾ overflow menu, or Hidden."]];
+    help.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    help.textColor = NSColor.secondaryLabelColor;
+    help.frame = NSMakeRect(20, y - 34, 440, 34); [v addSubview:help];
+    y -= 34 + 14;
+
+    [self _buildTahoeEditGroups];
+
+    const CGFloat outlineH = 340;
+    NSScrollView *sc = [[NSScrollView alloc] initWithFrame:
+        NSMakeRect(20, y - outlineH, 460, outlineH)];
+    sc.hasVerticalScroller = YES;
+    sc.borderType = NSBezelBorder;
+    sc.autohidesScrollers = YES;
+
+    NSOutlineView *ov = [[NSOutlineView alloc] initWithFrame:sc.bounds];
+    NSTableColumn *nameCol = [[NSTableColumn alloc] initWithIdentifier:@"name"];
+    nameCol.title = [loc translate:@"Button"]; nameCol.width = 280; nameCol.minWidth = 160;
+    NSTableColumn *placeCol = [[NSTableColumn alloc] initWithIdentifier:@"placement"];
+    placeCol.title = [loc translate:@"Placement"]; placeCol.width = 150; placeCol.minWidth = 120;
+    [ov addTableColumn:nameCol];
+    [ov addTableColumn:placeCol];
+    ov.outlineTableColumn = nameCol;
+    ov.dataSource = self;
+    ov.delegate = self;
+    ov.indentationPerLevel = 14;
+    ov.allowsColumnResizing = YES;
+    ov.usesAlternatingRowBackgroundColors = YES;
+    sc.documentView = ov;
+    [v addSubview:sc];
+    _tahoeOutline = ov;
+    [ov reloadData];
+    [ov expandItem:nil expandChildren:YES];
+    y -= outlineH + 12;
+
+    NSButton *reset = [NSButton buttonWithTitle:[loc translate:@"Reset to Defaults"]
+                                         target:self action:@selector(_tahoeResetGroups:)];
+    reset.bezelStyle = NSBezelStyleRounded;
+    reset.frame = NSMakeRect(20, y - 6, 170, 26); [v addSubview:reset];
+
+    return v;
+}
+
 - (void)_toolbarColorModeChanged:(NSButton *)sender {
     [[NSUserDefaults standardUserDefaults] setInteger:sender.tag forKey:kPrefToolbarColorMode];
     [[NSNotificationCenter defaultCenter] postNotificationName:@"NPPToolbarColorChanged" object:nil];
@@ -747,6 +887,185 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
     [[NSNotificationCenter defaultCenter] postNotificationName:@"NPPToolbarColorChanged" object:nil];
 }
 
+#pragma mark - Tahoe Toolbar Group Editor (gated)
+
+// State codes used in the edit model and the placement popup: 0=Toolbar (primary),
+// 1=Overflow menu, 2=Hidden.
+
+// Build the editable tree from the on-disk Tahoe config (or defaults). Built-in
+// groups draw their button universe from the defaults catalog (so Hidden buttons
+// can be re-surfaced); the Plugins group's universe comes from the file (the host
+// materializes all live plugins into it).
+- (void)_buildTahoeEditGroups {
+    NSArray<NSDictionary *> *loaded   = [TahoeToolbarConfig load];
+    NSArray<NSDictionary *> *defaults = [TahoeToolbarConfig defaultBuiltinGroups];
+
+    NSMutableDictionary<NSString *, NSDictionary *> *loadedByLabel = [NSMutableDictionary dictionary];
+    for (NSDictionary *g in loaded) if (g[@"label"]) loadedByLabel[g[@"label"]] = g;
+
+    NSMutableArray *groups = [NSMutableArray array];
+
+    for (NSDictionary *def in defaults) {
+        NSString *label   = def[@"label"];
+        NSDictionary *lf  = loadedByLabel[label];
+        NSArray *primary  = lf ? (lf[@"primary"]  ?: @[]) : (def[@"primary"]  ?: @[]);
+        NSArray *overflow = lf ? (lf[@"overflow"] ?: @[]) : (def[@"overflow"] ?: @[]);
+        NSSet *primSet = [NSSet setWithArray:primary];
+        NSSet *overSet = [NSSet setWithArray:overflow];
+
+        // Display order: file primary, then file overflow, then any remaining
+        // default-universe buttons (currently hidden), in default order.
+        NSMutableArray<NSString *> *order = [NSMutableArray array];
+        for (NSString *k in primary)  if (![order containsObject:k]) [order addObject:k];
+        for (NSString *k in overflow) if (![order containsObject:k]) [order addObject:k];
+        NSMutableArray<NSString *> *universe = [NSMutableArray array];
+        [universe addObjectsFromArray:(def[@"primary"]  ?: @[])];
+        [universe addObjectsFromArray:(def[@"overflow"] ?: @[])];
+        for (NSString *k in universe) if (![order containsObject:k]) [order addObject:k];
+
+        NSMutableArray *items = [NSMutableArray array];
+        for (NSString *k in order) {
+            NSInteger state = [primSet containsObject:k] ? 0 : ([overSet containsObject:k] ? 1 : 2);
+            [items addObject:[@{ @"key": k,
+                                 @"display": [TahoeToolbarConfig displayNameForId:k],
+                                 @"state": @(state) } mutableCopy]];
+        }
+        [groups addObject:[@{ @"label": label, @"kind": @"builtin",
+                              @"items": items } mutableCopy]];
+    }
+
+    // Plugins group (universe from the file; display name = the command name).
+    NSDictionary *plug = nil;
+    for (NSDictionary *g in loaded)
+        if ([g[@"kind"] isEqualToString:@"plugins"]) { plug = g; break; }
+    if (plug) {
+        NSMutableArray *items = [NSMutableArray array];
+        NSArray *sections = @[ @[@"primary", @0], @[@"overflow", @1], @[@"hidden", @2] ];
+        for (NSArray *sec in sections)
+            for (NSString *k in (NSArray *)(plug[sec[0]] ?: @[]))
+                [items addObject:[@{ @"key": k, @"display": k, @"state": sec[1] } mutableCopy]];
+        if (items.count)
+            [groups addObject:[@{ @"label": @"Plugins", @"kind": @"plugins",
+                                  @"customized": @([plug[@"customized"] boolValue]),
+                                  @"items": items } mutableCopy]];
+    }
+
+    _tahoeEditGroups = groups;
+}
+
+// Serialize the edit tree back to the file and tell the live window to rebuild.
+- (void)_tahoeSaveEditGroups {
+    NSMutableArray *model = [NSMutableArray array];
+    for (NSDictionary *g in _tahoeEditGroups) {
+        NSMutableArray *primary = [NSMutableArray array];
+        NSMutableArray *overflow = [NSMutableArray array];
+        NSMutableArray *hidden = [NSMutableArray array];
+        for (NSDictionary *it in g[@"items"]) {
+            NSString *k = it[@"key"];
+            switch ([it[@"state"] integerValue]) {
+                case 0:  [primary addObject:k];  break;
+                case 1:  [overflow addObject:k]; break;
+                default: [hidden addObject:k];   break;
+            }
+        }
+        NSMutableDictionary *gm = [@{ @"label": g[@"label"], @"kind": g[@"kind"],
+                                      @"primary": primary, @"overflow": overflow,
+                                      @"hidden": hidden } mutableCopy];
+        if ([g[@"customized"] boolValue]) gm[@"customized"] = @YES;
+        [model addObject:gm];
+    }
+    [TahoeToolbarConfig saveModel:model];
+    [[NSNotificationCenter defaultCenter] postNotificationName:NPPTahoeToolbarConfigChanged object:nil];
+}
+
+- (void)_tahoePlacementChanged:(NSPopUpButton *)sender {
+    NSInteger row = [_tahoeOutline rowForView:sender];
+    if (row < 0) return;
+    id item = [_tahoeOutline itemAtRow:row];
+    if (![item isKindOfClass:[NSMutableDictionary class]] || !item[@"state"]) return;
+    item[@"state"] = @(sender.indexOfSelectedItem);
+    // Editing a plugin row means the user has taken over the Plugins group, so the
+    // host stops re-applying its smart default and preserves this arrangement.
+    id parent = [_tahoeOutline parentForItem:item];
+    if ([parent isKindOfClass:[NSMutableDictionary class]] &&
+        [parent[@"kind"] isEqualToString:@"plugins"])
+        ((NSMutableDictionary *)parent)[@"customized"] = @YES;
+    [self _tahoeSaveEditGroups];
+}
+
+- (void)_tahoeResetGroups:(id)sender {
+    // Delete the file, let the host regenerate it (defaults + live plugins)
+    // synchronously, then reload the editor from the fresh file.
+    [TahoeToolbarConfig removeFile];
+    [[NSNotificationCenter defaultCenter] postNotificationName:NPPTahoeToolbarConfigChanged object:nil];
+    [self _buildTahoeEditGroups];
+    [_tahoeOutline reloadData];
+    [_tahoeOutline expandItem:nil expandChildren:YES];
+}
+
+#pragma mark NSOutlineView data source / delegate (Tahoe editor)
+
+- (NSInteger)outlineView:(NSOutlineView *)ov numberOfChildrenOfItem:(id)item {
+    if (item == nil) return (NSInteger)_tahoeEditGroups.count;
+    if ([item isKindOfClass:[NSDictionary class]] && item[@"items"])
+        return (NSInteger)((NSArray *)item[@"items"]).count;
+    return 0;
+}
+
+- (id)outlineView:(NSOutlineView *)ov child:(NSInteger)index ofItem:(id)item {
+    if (item == nil) return _tahoeEditGroups[index];
+    return ((NSArray *)item[@"items"])[index];
+}
+
+- (BOOL)outlineView:(NSOutlineView *)ov isItemExpandable:(id)item {
+    return [item isKindOfClass:[NSDictionary class]] && item[@"items"] != nil;
+}
+
+- (BOOL)outlineView:(NSOutlineView *)ov shouldSelectItem:(id)item {
+    return NO;
+}
+
+- (NSView *)outlineView:(NSOutlineView *)ov viewForTableColumn:(NSTableColumn *)col item:(id)item {
+    NppLocalizer *loc = [NppLocalizer shared];
+    BOOL isGroup = ([item isKindOfClass:[NSDictionary class]] && item[@"items"] != nil);
+
+    if ([col.identifier isEqualToString:@"name"]) {
+        NSTextField *tf = [ov makeViewWithIdentifier:@"tahoeName" owner:self];
+        if (!tf) {
+            tf = [NSTextField labelWithString:@""];
+            tf.identifier = @"tahoeName";
+            tf.bordered = NO; tf.drawsBackground = NO; tf.editable = NO;
+        }
+        if (isGroup) {
+            tf.stringValue = [loc translate:item[@"label"]];
+            tf.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+        } else {
+            tf.stringValue = item[@"display"] ?: (item[@"key"] ?: @"");
+            tf.font = [NSFont systemFontOfSize:NSFont.systemFontSize];
+        }
+        return tf;
+    }
+
+    if ([col.identifier isEqualToString:@"placement"]) {
+        if (isGroup) return nil;
+        NSPopUpButton *pop = [ov makeViewWithIdentifier:@"tahoePlace" owner:self];
+        if (!pop) {
+            pop = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 140, 22) pullsDown:NO];
+            pop.identifier = @"tahoePlace";
+            pop.controlSize = NSControlSizeSmall;
+            pop.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+            [pop addItemsWithTitles:@[ [loc translate:@"Toolbar"],
+                                       [loc translate:@"Overflow menu"],
+                                       [loc translate:@"Hidden"] ]];
+            pop.target = self;
+            pop.action = @selector(_tahoePlacementChanged:);
+        }
+        [pop selectItemAtIndex:[item[@"state"] integerValue]];
+        return pop;
+    }
+    return nil;
+}
+
 #pragma mark - Editor Page
 
 - (NSView *)_buildEditorPage {
@@ -761,6 +1080,7 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
         @[[loc translate:@"Highlight current line"],          @105, kPrefHighlightCurrentLine],
         @[[loc translate:@"Auto-close brackets ( ) [ ] { }"], @700, kPrefAutoCloseBrackets],
         @[[loc translate:@"Enable virtual space"],            @702, kPrefVirtualSpace],
+        @[[loc translate:@"Column selection switches to multi-editing"], @713, kPrefColumnSel2MultiEdit],
         @[[loc translate:@"Scroll beyond last line"],         @703, kPrefScrollBeyondLastLine],
         @[[loc translate:@"Copy/cut line without selection"],  @706, kPrefCopyLineNoSelection],
         @[[loc translate:@"Right-click keeps selection"],      @707, kPrefRightClickKeepsSel],
@@ -809,6 +1129,25 @@ NSString *const kPrefStyleFontSize      = @"styleFontSize";
     [fqPopup selectItemAtIndex:[ud integerForKey:kPrefFontQuality]];
     fqPopup.tag = 705; fqPopup.target = self; fqPopup.action = @selector(prefChanged:);
     [v addSubview:fqPopup];
+
+    // Line spacing (issue #149) — multiplier presets applied as extra ascent
+    // + descent in pixels (Scintilla SCI_SETEXTRAASCENT/DESCENT). 1.0 = current.
+    y -= 32;
+    NSTextField *lsLabel = [NSTextField labelWithString:[loc translate:@"Line spacing:"]];
+    lsLabel.frame = NSMakeRect(20, y, 120, 20);
+    [v addSubview:lsLabel];
+    NSPopUpButton *lsPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(150, y-2, 180, 26) pullsDown:NO];
+    [lsPopup addItemsWithTitles:@[
+        [loc translate:@"1.0 (Default)"], @"1.2", @"1.3", @"1.4", @"1.5"]];
+    static const double kLineHeightPresets[5] = {1.0, 1.2, 1.3, 1.4, 1.5};
+    double curMult = [ud doubleForKey:kPrefLineHeightMultiplier];
+    NSInteger lsIdx = 0;
+    for (NSInteger i = 0; i < 5; i++) {
+        if (fabs(curMult - kLineHeightPresets[i]) < 1e-6) { lsIdx = i; break; }
+    }
+    [lsPopup selectItemAtIndex:lsIdx];
+    lsPopup.tag = 712; lsPopup.target = self; lsPopup.action = @selector(prefChanged:);
+    [v addSubview:lsPopup];
 
     return v;
 }
@@ -1226,6 +1565,7 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         @[[loc translate:@"Show close button on tabs"],        @800, kPrefTabCloseButton],
         @[[loc translate:@"Double-click to close tab"],        @801, kPrefDoubleClickTabClose],
         @[[loc translate:@"Wrap tabs to multiple lines"],      @803, kPrefTabBarWrap],
+        @[[loc translate:@"Hide tab bar"],                     @804, kPrefHideTabBar],
     ];
     for (NSArray *def in checks) {
         NSButton *chk = [NSButton checkboxWithTitle:def[0] target:self action:@selector(prefChanged:)];
@@ -1521,6 +1861,7 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         @[[loc translate:@"Use monospaced font in Find dialog"],      @1004, kPrefMonoFontFind],
         @[[loc translate:@"Confirm Replace All in open documents"],   @1005, kPrefConfirmReplaceAll],
         @[[loc translate:@"Replace: don't move to next occurrence"],  @1006, kPrefReplaceAndStop],
+        @[[loc translate:@"Use Boost Regex mode (multi-line; restart to apply)"], @1008, kPrefUseBoostRegex],
     ];
     for (NSArray *def in checks) {
         NSButton *chk = [NSButton checkboxWithTitle:def[0] target:self action:@selector(prefChanged:)];
@@ -1544,6 +1885,82 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
 }
 
 // Search Engine page removed — merged into Searching
+
+#pragma mark - Cloud & Link Page
+
+// Mirrors the "Clickable Link Settings" group from Windows NPP's "Cloud & Link"
+// preferences page (issue #133). The three checkboxes encode the same state
+// Windows packs into its urlMode enum; we persist them as independent booleans
+// (the link feature derives its style from them). The URI customized schemes
+// text box lists extra schemes that should also be treated as links.
+// This wires the settings only — link detection/highlight/open is separate.
+- (NSView *)_buildCloudLinkPage {
+    NSView *v = [[NSView alloc] init];
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NppLocalizer *loc = [NppLocalizer shared];
+    CGFloat y = 380;
+
+    NSTextField *header = [NSTextField labelWithString:[loc translate:@"Clickable Link Settings"]];
+    header.frame = NSMakeRect(20, y, 400, 20);
+    header.font = [NSFont boldSystemFontOfSize:13];
+    [v addSubview:header];
+    y -= 32;
+
+    BOOL enabled = [ud boolForKey:kPrefClickableLinkEnable];
+
+    NSButton *enable = [NSButton checkboxWithTitle:[loc translate:@"Enable"]
+                                            target:self action:@selector(prefChanged:)];
+    enable.frame = NSMakeRect(40, y, 180, 20);
+    enable.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    enable.tag = 1600;
+    [v addSubview:enable];
+
+    NSButton *noUnderline = [NSButton checkboxWithTitle:[loc translate:@"No underline"]
+                                                 target:self action:@selector(prefChanged:)];
+    noUnderline.frame = NSMakeRect(230, y, 240, 20);
+    noUnderline.state = [ud boolForKey:kPrefClickableLinkNoUnderline] ? NSControlStateValueOn : NSControlStateValueOff;
+    noUnderline.tag = 1601;
+    noUnderline.enabled = enabled;
+    [v addSubview:noUnderline];
+    y -= 26;
+
+    NSButton *fullbox = [NSButton checkboxWithTitle:[loc translate:@"Enable fullbox mode"]
+                                             target:self action:@selector(prefChanged:)];
+    fullbox.frame = NSMakeRect(230, y, 240, 20);
+    fullbox.state = [ud boolForKey:kPrefClickableLinkFullBox] ? NSControlStateValueOn : NSControlStateValueOff;
+    fullbox.tag = 1602;
+    fullbox.enabled = enabled;
+    [v addSubview:fullbox];
+    y -= 42;
+
+    NSTextField *schemesLabel = [NSTextField labelWithString:[loc translate:@"URI customized schemes:"]];
+    schemesLabel.frame = NSMakeRect(20, y, 400, 20);
+    [v addSubview:schemesLabel];
+    y -= 84;
+
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, y, 480, 78)];
+    scroll.hasVerticalScroller = YES;
+    scroll.autohidesScrollers   = YES;
+    scroll.borderType           = NSBezelBorder;
+
+    NSTextView *tv = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds];
+    tv.minSize = NSMakeSize(0, 78);
+    tv.maxSize = NSMakeSize(FLT_MAX, FLT_MAX);
+    tv.verticallyResizable   = YES;
+    tv.horizontallyResizable = NO;
+    tv.autoresizingMask      = NSViewWidthSizable;
+    tv.textContainer.widthTracksTextView = YES;
+    tv.richText  = NO;
+    tv.editable  = YES;
+    tv.font      = [NSFont systemFontOfSize:12];
+    tv.string    = [ud stringForKey:kPrefClickableLinkSchemes] ?: @"";
+    tv.delegate  = self;
+    scroll.documentView = tv;
+    [v addSubview:scroll];
+    _clickableSchemesTextView = tv;
+
+    return v;
+}
 
 #pragma mark - Performance Page
 
@@ -1749,6 +2166,8 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         @[[loc translate:@"Remember panel visibility across sessions"], @1204, kPrefPanelKeepState],
         @[[loc translate:@"Use XML-based function list parsers"],      @1205, kPrefFuncListUseXML],
         @[@"Route plugin messages to split view editors",            @1206, kPrefPluginSplitViewRouting],
+        @[[loc translate:@"File Status Auto-Detection"],              @1208, kPrefFileStatusAutoDetection],
+        @[[loc translate:@"Update silently"],                         @1209, kPrefFileStatusUpdateSilently],
     ];
     for (NSArray *def in checks) {
         NSButton *chk = [NSButton checkboxWithTitle:def[0] target:self action:@selector(prefChanged:)];
@@ -1758,6 +2177,11 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         [v addSubview:chk];
         y -= 28;
     }
+
+    // "Update silently" only applies while auto-detection is on — grey it out
+    // when the parent is off (matches Windows' sub-option behavior).
+    [(NSButton *)[v viewWithTag:1209]
+        setEnabled:[ud boolForKey:kPrefFileStatusAutoDetection]];
 
     // ── Toolbar icon size dropdown ─────────────────────────────────────────────
     // Restart-required (per design — toolbar metrics are cached on first use
@@ -1789,6 +2213,32 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
     }
     [scalePopup selectItemAtIndex:pickIdx];
     [v addSubview:scalePopup];
+    y -= 28;
+
+    // ── Mouse wheel scroll speed ───────────────────────────────────────────────
+    // Non-linear acceleration for discrete (clicky) mouse wheels: spinning faster
+    // scrolls proportionally more, up to this multiplier at full speed. 1× (off)
+    // is the default and leaves scrolling exactly as it was. Read live by
+    // ScintillaView on each wheel event — no restart needed.
+    y -= 8;
+    NSTextField *wheelLabel = [NSTextField labelWithString:[loc translate:@"Mouse wheel scroll speed"]];
+    wheelLabel.frame = NSMakeRect(20, y, 200, 20);
+    [v addSubview:wheelLabel];
+
+    NSPopUpButton *wheelPopup = [[NSPopUpButton alloc]
+        initWithFrame:NSMakeRect(220, y - 3, 130, 26) pullsDown:NO];
+    [wheelPopup addItemsWithTitles:@[[loc translate:@"1× (off)"], @"2×", @"3×", @"5×", @"8×", @"10×"]];
+    wheelPopup.target = self;
+    wheelPopup.action = @selector(prefChanged:);
+    wheelPopup.tag    = 1210;
+    static const double wheelGains[] = {1.0, 2.0, 3.0, 5.0, 8.0, 10.0};
+    double curGain = [ud doubleForKey:kPrefScrollSpeedGain];
+    NSInteger gainIdx = 0;
+    for (NSInteger i = 0; i < 6; i++) {
+        if (fabs(curGain - wheelGains[i]) < 1e-6) { gainIdx = i; break; }
+    }
+    [wheelPopup selectItemAtIndex:gainIdx];
+    [v addSubview:wheelPopup];
     y -= 28;
 
     return v;
@@ -1870,6 +2320,7 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         case 801: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefDoubleClickTabClose]; break;
         case 802: [ud setInteger:[(NSTextField *)sender integerValue] forKey:kPrefTabMaxLabelWidth]; break;
         case 803: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefTabBarWrap]; break;
+        case 804: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefHideTabBar]; break;
         // General
         case 900: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefShowFullPathInTitle]; break;
         // Searching
@@ -1881,6 +2332,15 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         case 1005: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefConfirmReplaceAll]; break;
         case 1006: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefReplaceAndStop]; break;
         case 1007: [ud setInteger:[(NSTextField *)sender integerValue] forKey:kPrefInSelThreshold]; break;
+        case 1008: {
+            BOOL on = [(NSButton *)sender state] == NSControlStateValueOn;
+            [ud setBool:on forKey:kPrefUseBoostRegex];
+            // New Documents (and any not-yet-searched ones) pick up the new engine
+            // immediately; already-searched Documents keep their cached backend
+            // until reopened — hence "restart to apply" in the label.
+            gNppUseBoostRegex = on;
+            break;
+        }
         // General
         case 901: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefShowStatusBar]; break;
         // Editor
@@ -1889,6 +2349,14 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         case 709: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefShowBookmarkMargin]; break;
         case 710: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefShowEOL]; break;
         case 711: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefShowWhitespace]; break;
+        case 713: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefColumnSel2MultiEdit]; break;
+        case 712: {  // Line spacing multiplier (issue #149)
+            static const double kPresets[5] = {1.0, 1.2, 1.3, 1.4, 1.5};
+            NSInteger idx = [(NSPopUpButton *)sender indexOfSelectedItem];
+            if (idx < 0 || idx >= 5) idx = 0;
+            [ud setDouble:kPresets[idx] forKey:kPrefLineHeightMultiplier];
+            break;
+        }
         // Margins
         case 1100: [ud setInteger:[(NSTextField *)sender integerValue] forKey:kPrefEdgeColumn]; break;
         case 1101: [ud setInteger:[(NSPopUpButton *)sender indexOfSelectedItem] forKey:kPrefEdgeMode]; break;
@@ -1904,6 +2372,23 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         case 1204: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefPanelKeepState]; break;
         case 1205: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefFuncListUseXML]; break;
         case 1206: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefPluginSplitViewRouting]; break;
+        case 1208: {  // File Status Auto-Detection
+            BOOL on = [(NSButton *)sender state] == NSControlStateValueOn;
+            [ud setBool:on forKey:kPrefFileStatusAutoDetection];
+            // Enable/disable the dependent "Update silently" checkbox.
+            [(NSButton *)[[(NSButton *)sender superview] viewWithTag:1209] setEnabled:on];
+            break;
+        }
+        case 1209: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefFileStatusUpdateSilently]; break;
+        case 1210: {
+            // Mouse wheel scroll speed (gain). Read live by ScintillaView on each
+            // wheel event, so no notification or restart is needed.
+            static const double gains[6] = {1.0, 2.0, 3.0, 5.0, 8.0, 10.0};
+            NSInteger idx = [(NSPopUpButton *)sender indexOfSelectedItem];
+            if (idx < 0 || idx >= 6) break;
+            [ud setDouble:gains[idx] forKey:kPrefScrollSpeedGain];
+            break;
+        }
         // Performance / Large File Restriction (1400-1407 — 1300s collide with Indentation)
         case 1400: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefLargeFileEnabled]; break;
         case 1401: {
@@ -1981,13 +2466,40 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
         case 1505:    // Allow on several lines
             [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefDelimEntireDoc];
             break;
+        // Cloud & Link — Clickable Link Settings (1600-1602; schemes text view
+        // persists via textDidChange:)
+        case 1600: {  // Enable
+            BOOL on = [(NSButton *)sender state] == NSControlStateValueOn;
+            [ud setBool:on forKey:kPrefClickableLinkEnable];
+            // Mirror Windows: the style sub-options are only meaningful when enabled.
+            NSView *page = [(NSButton *)sender superview];
+            [(NSButton *)[page viewWithTag:1601] setEnabled:on];
+            [(NSButton *)[page viewWithTag:1602] setEnabled:on];
+            break;
+        }
+        case 1601: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefClickableLinkNoUnderline]; break;
+        case 1602: [ud setBool:[(NSButton *)sender state] == NSControlStateValueOn forKey:kPrefClickableLinkFullBox]; break;
     }
 
     [[NSNotificationCenter defaultCenter] postNotificationName:@"NPPPreferencesChanged" object:nil];
 }
 
 - (void)closePrefs:(id)sender {
+    [self _saveClickableSchemes];
     [self.window orderOut:nil];
+}
+
+#pragma mark - NSTextViewDelegate
+
+- (void)textDidChange:(NSNotification *)notification {
+    if (notification.object == _clickableSchemesTextView)
+        [self _saveClickableSchemes];
+}
+
+- (void)_saveClickableSchemes {
+    if (!_clickableSchemesTextView) return;
+    [[NSUserDefaults standardUserDefaults] setObject:(_clickableSchemesTextView.string ?: @"")
+                                              forKey:kPrefClickableLinkSchemes];
 }
 
 @end

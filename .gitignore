@@ -4,6 +4,7 @@
 # Build output
 build/
 build-release/
+build-release-tahoe/
 build_bkp/
 build-release_bkp/
 

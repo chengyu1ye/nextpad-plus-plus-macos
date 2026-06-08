@@ -3,6 +3,7 @@
 #import "SearchResultsPanel.h"
 #import "ProjectPanel.h"
 #import "NppLocalizer.h"
+#import "PreferencesWindowController.h"
 #import <objc/runtime.h>
 
 // ── History keys ─────────────────────────────────────────────────────────────
@@ -13,12 +14,13 @@ static NSString * const kHistoryFilter  = @"FindWindow_FilterHistory";
 static NSString * const kHistoryDir     = @"FindWindow_DirHistory";
 static const NSInteger kMaxHistory = 20;
 
-// Issue #37 — on Find tab, after a successful find via Enter in the search
-// combo we dim the window so the user can see the highlighted match in the
-// editor underneath. Restored to 1.0 when the window becomes key again
-// (user clicks back) or via Escape. Tuned low enough to make the editor
-// clearly readable but not so low the window vanishes.
-static const CGFloat kDimAlphaValue = 0.5;
+// Issue #143 — Find window transparency (Windows parity). The control lives in
+// the Find/Replace tabs (see _buildTransparencyGroup:inView:). When enabled in
+// "on losing focus" mode the window dims to kPrefFindTransparencyAlpha on
+// resignKey and restores on becomeKey; in "always" mode it stays dimmed.
+// kTransparencyMin/Max bound the slider.
+static const CGFloat kTransparencyMin = 0.2;
+static const CGFloat kTransparencyMax = 0.9;
 
 // ── Layout constants (matching Windows NPP proportions) ──────────────────────
 
@@ -74,10 +76,13 @@ static const CGFloat kChkH      = 20;    // checkbox height
     FindWindowTab _currentTab;
     BOOL _cancelSearch;
 
-    // Issue #37 — set when a Find-tab Enter has just dimmed the window.
-    // windowDidBecomeKey: / cancelOperation: use this flag to know whether
-    // they need to restore opacity (they only restore if WE dimmed it).
-    BOOL _dimAfterFind;
+    // Issue #143 — Transparency controls, one set per tab (indices match
+    // FindWindowTab: 0=Find 1=Replace 2=FiF 3=FiP 4=Mark). Kept in sync via
+    // _syncTransparencyControls.
+    NSButton *_trEnable[5];
+    NSButton *_trLosingFocus[5];
+    NSButton *_trAlways[5];
+    NSSlider *_trSlider[5];
 }
 
 static FindWindow *_sharedInstance = nil;
@@ -106,12 +111,18 @@ static FindWindow *_sharedInstance = nil;
     // builds and maintains the key-view loop automatically, including
     // across tab switches that re-parent the shared combo boxes.
     win.autorecalculatesKeyViewLoop = YES;
+    // Issue #143 — float above the editor so clicking into the document
+    // doesn't bury the Find window (which made "dim on losing focus"
+    // pointless). hidesOnDeactivate keeps it from hovering over other apps
+    // when Nextpad++ isn't frontmost — it reappears when we return.
+    win.level = NSFloatingWindowLevel;
+    win.hidesOnDeactivate = YES;
     [win center];
 
     self = [super initWithWindow:win];
     if (self) {
-        // Issue #37 — we observe windowDidBecomeKey: to restore opacity
-        // after a "find-and-dim". Set after super init so the window is
+        // Issue #143 — we observe windowDidBecomeKey:/windowDidResignKey: to
+        // drive the transparency setting. Set after super init so the window is
         // fully owned by self.
         win.delegate = self;
 
@@ -129,14 +140,13 @@ static FindWindow *_sharedInstance = nil;
     _currentTab = tab;
     _tabControl.selectedSegment = tab;
     [self _switchToTab:tab];
-    // Issue #37 — always present the window fully opaque. If a previous
-    // session dimmed it via Find+Enter and the user closed without ever
-    // clicking back, the window would re-open at 0.4 opacity otherwise.
-    self.window.alphaValue = 1.0;
-    _dimAfterFind = NO;
     [self showWindow:nil];
     [self.window makeKeyAndOrderFront:nil];
     [self.window makeFirstResponder:_findCombo];
+    // Issue #143 — apply transparency for the just-shown window. In "always"
+    // mode this dims immediately; in "on losing focus" the window is key here
+    // so it stays opaque until focus leaves.
+    [self _applyTransparency];
 }
 
 - (NSString *)searchText { return _findCombo.stringValue ?: @""; }
@@ -374,6 +384,56 @@ static void _placeChk(NSView *parent, NSButton *chk, CGFloat x, CGFloat y) {
                                      _smDotNL[idx].frame.size.height);
 }
 
+/// Issue #143 — Build the Transparency control group (checkbox + 2 radios +
+/// slider) in the empty bottom-right pocket of the Find/Replace tabs. The
+/// pocket is bounded by the Close button (bottom edge y=133) and the Search
+/// Mode box (right edge x=430); all controls sit at x>=434, parked low in the
+/// bottom-right corner so they never collide with existing elements. NSView
+/// doesn't clip subviews, so the slider's slightly-negative y renders fine in
+/// the gap above the status bar. idx selects the per-tab slot (0=Find, 1=Replace).
+- (void)_buildTransparencyGroup:(int)idx inView:(NSView *)parent {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL enabled   = [ud boolForKey:kPrefFindTransparencyEnabled];
+    NSInteger mode = [ud integerForKey:kPrefFindTransparencyMode];
+    double alpha   = [ud doubleForKey:kPrefFindTransparencyAlpha];
+
+    NSButton *chk = _mkChk([[NppLocalizer shared] translate:@"Transparency"]);
+    chk.target = self; chk.action = @selector(_transparencyToggled:);
+    chk.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    [parent addSubview:chk];
+    chk.frame = NSMakeRect(434, 61, 174, 18);
+
+    NSButton *r1 = _mkRadio([[NppLocalizer shared] translate:@"On losing focus"]);
+    r1.target = self; r1.action = @selector(_transparencyModeChanged:);
+    r1.state = (mode == 1) ? NSControlStateValueOff : NSControlStateValueOn;
+    [parent addSubview:r1];
+    r1.frame = NSMakeRect(450, 39, 158, 18);
+
+    NSButton *r2 = _mkRadio([[NppLocalizer shared] translate:@"Always"]);
+    r2.target = self; r2.action = @selector(_transparencyModeChanged:);
+    r2.state = (mode == 1) ? NSControlStateValueOn : NSControlStateValueOff;
+    [parent addSubview:r2];
+    r2.frame = NSMakeRect(450, 17, 158, 18);
+
+    NSSlider *sl = [NSSlider sliderWithValue:alpha
+                                    minValue:kTransparencyMin
+                                    maxValue:kTransparencyMax
+                                      target:self
+                                      action:@selector(_transparencyAlphaChanged:)];
+    sl.continuous = YES;
+    [parent addSubview:sl];
+    sl.frame = NSMakeRect(450, -9, 150, 20);
+
+    _trEnable[idx]      = chk;
+    _trLosingFocus[idx] = r1;
+    _trAlways[idx]      = r2;
+    _trSlider[idx]      = sl;
+
+    r1.enabled = enabled;
+    r2.enabled = enabled;
+    sl.enabled = enabled;
+}
+
 #pragma mark - Build all 5 tabs
 
 - (void)_buildAllTabs {
@@ -469,6 +529,9 @@ static CGFloat _fromTop(NSView *container, CGFloat topOffset, CGFloat height) {
     // Search Mode group box
     [self _buildSearchModeGroup:0 inView:v atY:chkY - 166];
 
+    // Issue #143 — Transparency group in the empty bottom-right pocket
+    [self _buildTransparencyGroup:0 inView:v];
+
     _views[0] = v;
     [self.window.contentView addSubview:v];
 }
@@ -528,6 +591,9 @@ static CGFloat _fromTop(NSView *container, CGFloat topOffset, CGFloat height) {
 
     [self _buildSearchModeGroup:1 inView:v atY:chkY - 166];
 
+    // Issue #143 — Transparency group (same layout as Find tab)
+    [self _buildTransparencyGroup:1 inView:v];
+
     _views[1] = v;
     v.hidden = YES;
     [self.window.contentView addSubview:v];
@@ -574,6 +640,7 @@ static CGFloat _fromTop(NSView *container, CGFloat topOffset, CGFloat height) {
     _placeChk(v, _fifInHiddenFolders, kBtnL, chkY - 22);
 
     [self _buildSearchModeGroup:2 inView:v atY:chkY - 120];
+    [self _buildTransparencyGroup:2 inView:v];
 
     _views[2] = v;
     v.hidden = YES;
@@ -613,6 +680,7 @@ static CGFloat _fromTop(NSView *container, CGFloat topOffset, CGFloat height) {
     _placeChk(v, _fipPanel3, kBtnL, chkY - 44);
 
     [self _buildSearchModeGroup:3 inView:v atY:chkY - 120];
+    [self _buildTransparencyGroup:3 inView:v];
 
     _views[3] = v;
     v.hidden = YES;
@@ -657,6 +725,7 @@ static CGFloat _fromTop(NSView *container, CGFloat topOffset, CGFloat height) {
     _placeChk(v, _mkWrapAround,  kLeftM, chkY - 110);
 
     [self _buildSearchModeGroup:4 inView:v atY:chkY - 210];
+    [self _buildTransparencyGroup:4 inView:v];
 
     _views[4] = v;
     v.hidden = YES;
@@ -779,16 +848,6 @@ static CGFloat _fromTop(NSView *container, CGFloat topOffset, CGFloat height) {
         [self _showStatus:[NSString stringWithFormat:[[NppLocalizer shared] translate:@"Find: Can't find the text \"%@\""], opts.searchText] found:NO];
     } else {
         [self _showStatus:@"" found:YES];
-        // Issue #37 — only on Find tab: dim the window so the user can
-        // see the highlighted match in the editor underneath. Restored
-        // when the window becomes key again or via Escape. We
-        // deliberately don't dim on Replace/FiF/FiP/Mark because those
-        // workflows expect the window to stay visible for next-step
-        // input (replacement text, file path, etc.).
-        if (_currentTab == FindWindowTabFind) {
-            self.window.animator.alphaValue = kDimAlphaValue;
-            _dimAfterFind = YES;
-        }
     }
 }
 
@@ -1229,30 +1288,81 @@ static CGFloat _fromTop(NSView *container, CGFloat topOffset, CGFloat height) {
     [self _findNext:nil];
 }
 
-#pragma mark - NSWindowDelegate
+#pragma mark - Transparency (issue #143)
 
-// Issue #37 — when the user clicks back on the find window after the
-// dim-on-find, restore full opacity. Only acts if WE were the ones who
-// dimmed it, so we don't fight any external alpha changes.
-- (void)windowDidBecomeKey:(NSNotification *)notification {
-    if (_dimAfterFind) {
-        self.window.animator.alphaValue = 1.0;
-        _dimAfterFind = NO;
+- (void)_transparencyToggled:(NSButton *)sender {
+    BOOL on = (sender.state == NSControlStateValueOn);
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:kPrefFindTransparencyEnabled];
+    [self _syncTransparencyControls];
+    [self _applyTransparency];
+}
+
+- (void)_transparencyModeChanged:(NSButton *)sender {
+    // Sender is one of the per-tab radios; an "Always" radio means mode 1.
+    BOOL always = NO;
+    for (int i = 0; i < 5; i++) if (sender == _trAlways[i]) { always = YES; break; }
+    [[NSUserDefaults standardUserDefaults] setInteger:(always ? 1 : 0)
+                                               forKey:kPrefFindTransparencyMode];
+    [self _syncTransparencyControls];
+    [self _applyTransparency];
+}
+
+- (void)_transparencyAlphaChanged:(NSSlider *)sender {
+    [[NSUserDefaults standardUserDefaults] setDouble:sender.doubleValue
+                                              forKey:kPrefFindTransparencyAlpha];
+    [self _syncTransparencyControls];
+    [self _applyTransparency];
+}
+
+/// Push the persisted transparency state onto every tab's control set so the
+/// Find and Replace tabs always agree, and gray out the sub-controls when the
+/// feature is off.
+- (void)_syncTransparencyControls {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL enabled   = [ud boolForKey:kPrefFindTransparencyEnabled];
+    NSInteger mode = [ud integerForKey:kPrefFindTransparencyMode];
+    double alpha   = [ud doubleForKey:kPrefFindTransparencyAlpha];
+    for (int i = 0; i < 5; i++) {
+        if (!_trEnable[i]) continue;
+        _trEnable[i].state      = enabled ? NSControlStateValueOn : NSControlStateValueOff;
+        _trLosingFocus[i].state = (mode == 1) ? NSControlStateValueOff : NSControlStateValueOn;
+        _trAlways[i].state      = (mode == 1) ? NSControlStateValueOn  : NSControlStateValueOff;
+        _trSlider[i].doubleValue = alpha;
+        _trLosingFocus[i].enabled = enabled;
+        _trAlways[i].enabled      = enabled;
+        _trSlider[i].enabled      = enabled;
     }
 }
 
-// Issue #37 — Escape: smart fallback. If the window is currently dimmed
-// from a Find+Enter, restore opacity (and DO NOT close — closing while
-// dimmed feels jarring and loses the user's search context). Otherwise,
-// behave as before and close the window. cancelOperation: bubbles up
-// the responder chain even when focus is in a field editor, which is
-// why we use it instead of catching 0x1B in keyDown:.
-- (void)cancelOperation:(id)sender {
-    if (_dimAfterFind) {
-        self.window.animator.alphaValue = 1.0;
-        _dimAfterFind = NO;
-        return;
+/// Set the window alpha from the current setting and key state.
+- (void)_applyTransparency {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL enabled   = [ud boolForKey:kPrefFindTransparencyEnabled];
+    NSInteger mode = [ud integerForKey:kPrefFindTransparencyMode];
+    double alpha   = [ud doubleForKey:kPrefFindTransparencyAlpha];
+    CGFloat target = 1.0;
+    if (enabled) {
+        if (mode == 1) target = alpha;                                  // always
+        else           target = self.window.isKeyWindow ? 1.0 : alpha;  // on losing focus
     }
+    self.window.animator.alphaValue = target;
+}
+
+#pragma mark - NSWindowDelegate
+
+// Issue #143 — drive transparency from focus changes.
+- (void)windowDidBecomeKey:(NSNotification *)notification {
+    [self _applyTransparency];
+}
+
+- (void)windowDidResignKey:(NSNotification *)notification {
+    [self _applyTransparency];
+}
+
+// Escape closes the window. cancelOperation: bubbles up the responder chain
+// even when focus is in a field editor, which is why we use it instead of
+// catching 0x1B in keyDown:.
+- (void)cancelOperation:(id)sender {
     [self _close:nil];
 }
 

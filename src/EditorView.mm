@@ -1,8 +1,11 @@
 #import "EditorView.h"
 #import "NppApplication.h"
 #import "NppLangsManager.h"
+#import "UserDefineLangManager.h"
+#import "NppBuiltinLanguages.h"
 #import "NppPluginManager.h"
 #import "PreferencesWindowController.h"
+#import "SearchEngine.h"   // #166 Phase 1: replay Windows Find/Replace (type-3) macros
 
 // NPPN_* constants (from NppPluginInterfaceMac.h — not included directly
 // to avoid SendMessage macro conflicts in host code)
@@ -79,98 +82,23 @@ static NSDictionary<NSString *, NSString *> *languageLexerNameMap() {
     static NSDictionary *map;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        map = @{
-            // ── C-family (all use "cpp" lexer) ──
-            @"c"            : @"cpp",
-            @"cpp"          : @"cpp",
-            @"objc"         : @"cpp",
-            @"cs"           : @"cpp",        // C#
-            @"java"         : @"cpp",
-            @"javascript"   : @"cpp",
-            @"javascript.js": @"cpp",
-            @"typescript"   : @"cpp",
-            @"swift"        : @"cpp",
-            @"rc"           : @"cpp",        // Resource script
-            @"actionscript" : @"cpp",
-            // ── Web ──
-            @"html"         : @"hypertext",
-            @"asp"          : @"hypertext",
-            @"xml"          : @"xml",
-            @"css"          : @"css",
-            @"json"         : @"json",
-            @"php"          : @"phpscript",
-            // ── Scripting ──
-            @"python"       : @"python",
-            @"ruby"         : @"ruby",
-            @"perl"         : @"perl",
-            @"lua"          : @"lua",
-            @"bash"         : @"bash",
-            @"powershell"   : @"powershell",
-            @"batch"        : @"batch",
-            @"tcl"          : @"tcl",
-            @"r"            : @"r",
-            @"raku"         : @"raku",
-            @"coffeescript"  : @"coffeescript",
-            // ── Systems ──
-            @"rust"         : @"rust",
-            @"go"           : @"cpp",        // Go uses cpp lexer
-            @"d"            : @"d",
-            // ── Markup / Config ──
-            @"markdown"     : @"markdown",
-            @"latex"        : @"latex",
-            @"tex"          : @"tex",
-            @"yaml"         : @"yaml",
-            @"toml"         : @"toml",
-            @"ini"          : @"props",      // INI uses "props" lexer
-            @"props"        : @"props",
-            @"makefile"     : @"makefile",
-            @"cmake"        : @"cmake",
-            @"diff"         : @"diff",
-            @"registry"     : @"registry",
-            @"nsis"         : @"nsis",
-            @"inno"         : @"inno",
-            // ── Database ──
-            @"sql"          : @"sql",
-            @"mssql"        : @"mssql",
-            // ── Scientific / Academic ──
-            @"fortran"      : @"fortran",
-            @"fortran77"    : @"f77",
-            @"pascal"       : @"pascal",
-            @"haskell"      : @"haskell",
-            @"caml"         : @"caml",
-            @"lisp"         : @"lisp",
-            @"scheme"       : @"lisp",       // Scheme uses Lisp lexer
-            @"erlang"       : @"erlang",
-            @"nim"          : @"nim",
-            @"gdscript"     : @"gdscript",
-            @"sas"          : @"sas",
-            // ── Hardware ──
-            @"vhdl"         : @"vhdl",
-            @"verilog"      : @"verilog",
-            @"spice"        : @"spice",
-            @"asm"          : @"asm",
-            // ── Other ──
-            @"ada"          : @"ada",
-            @"cobol"        : @"COBOL",
-            @"vb"           : @"vb",
-            @"autoit"       : @"au3",
-            @"postscript"   : @"ps",
-            @"smalltalk"    : @"smalltalk",
-            @"forth"        : @"forth",
-            @"oscript"      : @"oscript",
-            @"avs"          : @"avs",
-            @"hollywood"    : @"hollywood",
-            @"purebasic"    : @"purebasic",
-            @"freebasic"    : @"freebasic",
-            @"blitzbasic"   : @"blitzbasic",
-            @"kix"          : @"kix",
-            @"matlab"       : @"matlab",
-            @"visualprolog" : @"visualprolog",
-            @"baanc"        : @"baan",
-            @"nncrontab"    : @"nncrontab",
-            @"csound"       : @"csound",
-            @"escript"      : @"escript",
-        };
+        // Single source of truth: derive every entry from the Windows-derived
+        // built-in language table (NppBuiltinLanguages.mm). Guarantees the menu,
+        // the open-by-extension path, and session-restore all resolve to the
+        // same lexer for every built-in language. Issue #144 follow-up.
+        NSUInteger count = 0;
+        const NppBuiltinLang *langs = NppBuiltinLanguagesAll(&count);
+        NSMutableDictionary *m = [NSMutableDictionary dictionaryWithCapacity:count + 1];
+        for (NSUInteger i = 0; i < count; i++) {
+            m[@(langs[i].internalName)] = @(langs[i].lexerID);
+        }
+        // Backwards-compat alias: pre-overhaul sessions / extension map may
+        // have stored "javascript" (Windows' L_JS_EMBEDDED internal name) as a
+        // tab's language. Route it to the same lexer as L_JAVASCRIPT so old
+        // sessions still highlight; the canonical name going forward is
+        // "javascript.js" (matches the Windows Language menu entry).
+        m[@"javascript"] = @"cpp";
+        map = [m copy];
     });
     return map;
 }
@@ -189,7 +117,11 @@ static NSDictionary<NSString *, NSString *> *extensionLanguageMap() {
             @"m"    : @"objc",    @"mm"   : @"objc",
             @"cs"   : @"cs",
             @"java" : @"java",
-            @"js"   : @"javascript", @"mjs"  : @"javascript", @"jsx" : @"javascript",
+            // Use "javascript.js" (Windows L_JAVASCRIPT internal name) so the
+            // open-by-extension result matches the Language menu's "JavaScript"
+            // entry — keeps the active-language checkmark correct. The lexer
+            // map keeps "javascript" as a backwards-compat alias.
+            @"js"   : @"javascript.js", @"mjs"  : @"javascript.js", @"jsx" : @"javascript.js",
             @"ts"   : @"typescript", @"tsx" : @"typescript",
             @"swift": @"swift",
             @"rc"   : @"rc",
@@ -218,7 +150,13 @@ static NSDictionary<NSString *, NSString *> *extensionLanguageMap() {
             @"go"   : @"go",
             @"d"    : @"d",
             // Markup / Config
-            @"md"   : @"markdown", @"markdown": @"markdown",
+            // .md/.markdown intentionally NOT mapped here — markdown is no
+            // longer a built-in language; the preinstalled Markdown UDL
+            // (~/.nextpad++/userDefineLangs/markdown._preinstalled.udl.xml)
+            // claims these extensions and is resolved via the UDL fallback
+            // in loadFileAtPath:. Mapping them to "markdown" here would
+            // shadow that fallback and leave the file plain (issue #130
+            // follow-up to the Windows-table menu overhaul).
             @"tex"  : @"latex",   @"latex": @"latex",
             @"yml"  : @"yaml",    @"yaml" : @"yaml",
             @"toml" : @"toml",
@@ -272,6 +210,45 @@ static inline NSStringEncoding nppEnc(CFStringEncoding cf) {
     return CFStringConvertEncodingToNSStringEncoding(cf);
 }
 
+// Normalize an encoding returned by +[NSString stringEncodingForData:] to the
+// constant our Encoding menu uses, so the auto-detected status-bar label and the
+// menu's check state stay consistent (the reverse name-map already covers these
+// canonical constants — no extra map entries needed). The detector returns CJK
+// *variants* (GB18030, cp950/DOSChineseTrad, cp932/DOSJapanese, …) that aren't the
+// same NSStringEncoding values as the menu items. Returns 0 when there's no mapping
+// (caller then keeps the detected encoding as-is). Note: the decoded *content* is
+// always taken from the detector's own decode, so normalizing here never corrupts
+// what is loaded — it only affects the label and the encoding used for a re-save.
+static NSStringEncoding canonicalCJKEncoding(NSStringEncoding ns) {
+    switch (CFStringConvertNSStringEncodingToEncoding(ns)) {
+        // Simplified Chinese family → GBK (shown as "GB2312", matching Windows CP936)
+        case kCFStringEncodingGB_18030_2000:
+        case kCFStringEncodingGBK_95:
+        case kCFStringEncodingGB_2312_80:
+        case kCFStringEncodingEUC_CN:
+        case kCFStringEncodingHZ_GB_2312:
+            return nppEnc(kCFStringEncodingGBK_95);
+        // Traditional Chinese family → Big5
+        case kCFStringEncodingBig5:
+        case kCFStringEncodingBig5_HKSCS_1999:
+        case kCFStringEncodingBig5_E:
+        case kCFStringEncodingDOSChineseTrad:
+            return nppEnc(kCFStringEncodingBig5);
+        // Japanese family → Shift-JIS
+        case kCFStringEncodingShiftJIS:
+        case kCFStringEncodingShiftJIS_X0213:
+        case kCFStringEncodingDOSJapanese:
+            return nppEnc(kCFStringEncodingShiftJIS);
+        // Korean family → EUC-KR
+        case kCFStringEncodingEUC_KR:
+        case kCFStringEncodingDOSKorean:
+        case kCFStringEncodingKSC_5601_87:
+            return nppEnc(kCFStringEncodingEUC_KR);
+        default:
+            return 0;
+    }
+}
+
 // Files larger than the threshold get a warning + large-file mode (no syntax,
 // no undo, plus per-feature gates from Performance prefs). When the user has
 // disabled "Enable Large File Restriction" entirely, returns SIZE_MAX so no
@@ -292,6 +269,7 @@ static NSUInteger nppLargeFileThreshold(void) {
     BOOL    _largeFileMode;
     BOOL    _wordWrapEnabled;
     BOOL    _savedWrapBeforeRTL;  // word wrap state before RTL was enabled
+    BOOL    _scintillaOverridesApplied;  // YES once Scintilla-command overrides were pushed to this editor's keymap
     BOOL    _isRecordingMacro;
     NSMutableArray<NSDictionary *> *_macroActions;
     NSInteger _untitledIndex;   // unique number for untitled tabs (1-based)
@@ -554,18 +532,37 @@ static NSUInteger nppLargeFileThreshold(void) {
             enc = NSISOLatin1StringEncoding;
             utf8Data = rawData;
         } else {
-            // Small non-UTF-8: try Win-1252, then Latin-1 (cheap walk on small).
-            NSStringEncoding win1252 = nppEnc(kCFStringEncodingWindowsLatin1);
-            NSString *content = [[NSString alloc] initWithData:rawData encoding:win1252];
-            if (content) {
-                enc = win1252;
-                utf8Data = [content dataUsingEncoding:NSUTF8StringEncoding];
-            } else {
-                content = [[NSString alloc] initWithData:rawData
-                                                encoding:NSISOLatin1StringEncoding];
+            // Small non-UTF-8: first ask macOS's heuristic charset detector — it
+            // covers the CJK encodings the old Win-1252/Latin-1 fallback turned into
+            // mojibake (GBK/GB18030, Big5, Shift-JIS, EUC, …). We only trust a result
+            // that decoded *without* lossy substitution; anything else falls through
+            // to the unchanged Win-1252/Latin-1 path, so Western files never regress.
+            NSString *detected = nil;
+            BOOL detLossy = NO;
+            NSStringEncoding guess = [NSString stringEncodingForData:rawData
+                                                    encodingOptions:nil
+                                                    convertedString:&detected
+                                                usedLossyConversion:&detLossy];
+            if (detected && guess != 0 && !detLossy && guess != NSUTF8StringEncoding) {
+                NSStringEncoding canon = canonicalCJKEncoding(guess);
+                enc = canon ?: guess;
+                utf8Data = [detected dataUsingEncoding:NSUTF8StringEncoding];
+            }
+
+            if (!utf8Data) {
+                // Fallback: try Win-1252, then Latin-1 (cheap walk on small files).
+                NSStringEncoding win1252 = nppEnc(kCFStringEncodingWindowsLatin1);
+                NSString *content = [[NSString alloc] initWithData:rawData encoding:win1252];
                 if (content) {
-                    enc = NSISOLatin1StringEncoding;
+                    enc = win1252;
                     utf8Data = [content dataUsingEncoding:NSUTF8StringEncoding];
+                } else {
+                    content = [[NSString alloc] initWithData:rawData
+                                                    encoding:NSISOLatin1StringEncoding];
+                    if (content) {
+                        enc = NSISOLatin1StringEncoding;
+                        utf8Data = [content dataUsingEncoding:NSUTF8StringEncoding];
+                    }
                 }
             }
         }
@@ -623,6 +620,12 @@ static NSUInteger nppLargeFileThreshold(void) {
 
     NSString *ext = path.pathExtension.lowercaseString;
     NSString *lang = extensionLanguageMap()[ext] ?: @"";
+    // Issue #130 — built-in extensions take precedence; if none matches, fall
+    // back to a User Defined Language whose ext= list claims this extension.
+    if (!lang.length) {
+        UserDefinedLang *udl = [[UserDefineLangManager shared] languageForExtension:ext];
+        if (udl) lang = udl.name;
+    }
     if (large) {
         // Syntax highlighting off (undo was already disabled before SCI_ADDTEXT
         // above — see "Pre-insert undo gate" comment).
@@ -791,6 +794,10 @@ static NSUInteger nppLargeFileThreshold(void) {
     NSString *newExt = path.pathExtension.lowercaseString ?: @"";
     if (![oldExt isEqualToString:newExt]) {
         NSString *lang = extensionLanguageMap()[newExt] ?: @"";
+        if (!lang.length) {  // issue #130 — UDL extension fallback
+            UserDefinedLang *udl = [[UserDefineLangManager shared] languageForExtension:newExt];
+            if (udl) lang = udl.name;
+        }
         [self setLanguage:lang];
     }
 
@@ -838,7 +845,8 @@ static NSUInteger nppLargeFileThreshold(void) {
     if (!dest) {
         // First backup for this buffer — create with timestamp (created once, reused forever)
         NSString *base = _filePath ? _filePath.lastPathComponent
-                                   : [NSString stringWithFormat:@"new %ld", (long)_untitledIndex];
+                       : (_customTabName.length ? _customTabName
+                          : [NSString stringWithFormat:@"new %ld", (long)_untitledIndex]);
         NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
         fmt.dateFormat = @"yyyy-MM-dd_HHmmss";
         NSString *name = [NSString stringWithFormat:@"%@@%@", base,
@@ -963,15 +971,25 @@ static NSUInteger nppLargeFileThreshold(void) {
     // No change if mtime matches what we last recorded.
     if (_lastKnownModDate && [mtime compare:_lastKnownModDate] != NSOrderedDescending) return;
 
+    // File Status Auto-Detection (Preferences > MISC, PR #116). When off, ignore
+    // external on-disk changes — but never override an explicit tail -f
+    // monitoring tab, which is a per-tab opt-in independent of this global setting.
+    NSUserDefaults *ud  = [NSUserDefaults standardUserDefaults];
+    BOOL autoDetect     = [ud boolForKey:kPrefFileStatusAutoDetection];
+    BOOL updateSilently = [ud boolForKey:kPrefFileStatusUpdateSilently];
+    if (!autoDetect && !_monitoringMode) return;
+
     _lastKnownModDate = mtime;
     _externalChangePending = YES;
 
-    if (_monitoringMode) {
+    // Reload without prompting when this tab is monitoring (tail -f), or when
+    // "Update silently" is on and the buffer has no unsaved edits. Dirty buffers
+    // always fall through to the prompt so unsaved changes are never discarded
+    // silently. Both silent paths preserve the caret (line + column) and scroll
+    // position; loadFileAtPath: otherwise resets the caret to 0, which would
+    // snap the view back to the top on every external change.
+    if (_monitoringMode || (updateSilently && !_isModified)) {
         ScintillaView *sci = _scintillaView;
-        // Preserve the caret (line + column) and the scroll position across
-        // the reload. loadFileAtPath: resets the caret to position 0, which
-        // would otherwise snap a monitored (tail -f) view back to the top on
-        // every external change.
         sptr_t savedPos          = [sci message:SCI_GETCURRENTPOS];
         sptr_t savedLine         = [sci message:SCI_LINEFROMPOSITION wParam:(uptr_t)savedPos];
         sptr_t savedColumn       = [sci message:SCI_GETCOLUMN wParam:(uptr_t)savedPos];
@@ -1045,7 +1063,18 @@ static NSUInteger nppLargeFileThreshold(void) {
 
     NSString *lexerName = languageLexerNameMap()[languageName.lowercaseString];
     if (!lexerName) {
-        [self applyPreferencesFromDefaults];
+        // Not a built-in language. Try a User Defined Language of this exact
+        // name (issue #130). Routing UDLs through setLanguage: makes them work
+        // for every name-based path — file open by extension, rename, session
+        // restore, and the Language menu — not just the manual menu selection.
+        // STYLECLEARALL above already reset styles; applyLanguage: then installs
+        // the user lexer and the UDL's WordsStyle colors on top.
+        UserDefinedLang *udl = [[UserDefineLangManager shared] languageNamed:languageName];
+        if (udl) {
+            [[UserDefineLangManager shared] applyLanguage:udl toScintillaView:_scintillaView];
+        } else {
+            [self applyPreferencesFromDefaults];
+        }
         [[NppPluginManager shared] notifyPluginsWithCode:NPPN_LANGCHANGED
                                                 bufferID:(intptr_t)(__bridge void *)self];
         return;
@@ -1115,6 +1144,7 @@ static NSUInteger nppLargeFileThreshold(void) {
 
 - (NSString *)displayName {
     if (_filePath) return _filePath.lastPathComponent;
+    if (_customTabName.length) return _customTabName;   // #177: renamed untitled tab
     // Mirror NPP: "new 1", "new 2", … (unique per buffer, like NPP's buffer IDs)
     return [NSString stringWithFormat:@"new %ld", (long)_untitledIndex];
 }
@@ -1156,7 +1186,7 @@ static NSUInteger nppLargeFileThreshold(void) {
             @(nppEnc(kCFStringEncodingWindowsBalticRim)):                              @"Windows-1257",
             @(nppEnc(kCFStringEncodingWindowsLatin5)):                                 @"Windows-1254",
             @(nppEnc(kCFStringEncodingBig5)):                                          @"Big5",
-            @(nppEnc(kCFStringEncodingGB_2312_80)):                                    @"GB2312",
+            @(nppEnc(kCFStringEncodingGBK_95)):                                        @"GB2312",  // GBK (CP936); GB_2312_80 has no macOS converter
             @(nppEnc(kCFStringEncodingShiftJIS)):                                      @"Shift-JIS",
             @(nppEnc(kCFStringEncodingEUC_KR)):                                        @"EUC-KR",
         };
@@ -1332,23 +1362,37 @@ static NSColor *nppColorFromHex(NSString *hex) {
     NSColor *fg = store.globalFg;
     NSColor *bg = store.globalBg;
 
+    // Global override (issue #149) — applies to STYLE_DEFAULT too, mirroring
+    // Windows ScintillaEditView.cpp:912/928 where setStyle() substitutes
+    // from the "Global override" row even when styleID == STYLE_DEFAULT
+    // (with the transparent-override carve-out that keeps Default Style's
+    // own value).
+    NPPStyleEntry *gov = [store globalStyleNamed:@"Global override"];
+    NPPStyleEntry *gsDefault = [store globalStyleNamed:@"Default Style"];
+    NSUserDefaults *_ud = [NSUserDefaults standardUserDefaults];
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableFg]       && gov.fgColor)        fg       = gov.fgColor;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableBg]       && gov.bgColor)        bg       = gov.bgColor;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableFont]     && gov.fontName.length>0) fontName = gov.fontName;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableFontSize] && gov.fontSize > 0)   fontSize = gov.fontSize;
+    BOOL defBold      = gsDefault.bold;
+    BOOL defItalic    = gsDefault.italic;
+    BOOL defUnderline = gsDefault.underline;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableBold])      defBold      = gov.bold;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableItalic])    defItalic    = gov.italic;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableUnderline]) defUnderline = gov.underline;
+
     const char *fontNameUTF8 = fontName.UTF8String;
     [sci message:SCI_STYLESETFONT wParam:STYLE_DEFAULT lParam:(sptr_t)fontNameUTF8];
     [sci message:SCI_STYLESETSIZEFRACTIONAL wParam:STYLE_DEFAULT lParam:(sptr_t)(fontSize * 100)];
     [sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_DEFAULT value:fg];
     [sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_DEFAULT value:bg];
 
-    // Apply Global "Default Style" bold/italic/underline to STYLE_DEFAULT
-    // BEFORE the STYLECLEARALL below, so the propagation carries these
-    // attributes to every other style in one pass. Without this, the
-    // Style Configurator's bold/italic/underline toggles for the Global
-    // Default Style had no effect on the editor at all (the per-style
-    // applyLexerColors: pass below only iterates language-specific
-    // styles, never STYLE_DEFAULT).
-    NPPStyleEntry *gsDefault = [store globalStyleNamed:@"Default Style"];
-    [sci message:SCI_STYLESETBOLD      wParam:STYLE_DEFAULT lParam:(gsDefault.bold      ? 1 : 0)];
-    [sci message:SCI_STYLESETITALIC    wParam:STYLE_DEFAULT lParam:(gsDefault.italic    ? 1 : 0)];
-    [sci message:SCI_STYLESETUNDERLINE wParam:STYLE_DEFAULT lParam:(gsDefault.underline ? 1 : 0)];
+    // Apply effective Default Style bold/italic/underline (with override
+    // substitution if enabled) BEFORE the STYLECLEARALL below, so the
+    // propagation carries these attributes to every other style in one pass.
+    [sci message:SCI_STYLESETBOLD      wParam:STYLE_DEFAULT lParam:(defBold      ? 1 : 0)];
+    [sci message:SCI_STYLESETITALIC    wParam:STYLE_DEFAULT lParam:(defItalic    ? 1 : 0)];
+    [sci message:SCI_STYLESETUNDERLINE wParam:STYLE_DEFAULT lParam:(defUnderline ? 1 : 0)];
 
     // Propagate defaults to all styles, then re-apply language-specific colors
     [sci message:SCI_STYLECLEARALL];
@@ -1413,9 +1457,76 @@ static NSColor *nppColorFromHex(NSString *hex) {
     NPPStyleEntry *gsWS = [store globalStyleNamed:@"White space symbol"];
     [sci message:SCI_SETWHITESPACEFORE wParam:1 lParam:sciColor(gsWS.fgColor ?: [NSColor orangeColor])];
 
-    // Re-apply language colors with the new theme palette
-    if (_currentLanguage.length) [self applyLexerColors:_currentLanguage];
+    // Re-apply language colors with the new theme palette. For UDL languages
+    // applyLexerColors is a no-op (NPPStyleStore only knows built-in lexers),
+    // so SCI_STYLECLEARALL above would otherwise leave UDL-styled tabs as
+    // plain text after every theme toggle. Re-route UDLs through the UDL
+    // apply path, and re-resolve by file extension so a multi-variant UDL
+    // (the markdown light/dark preinstalled pair) picks the variant matching
+    // the new dark-mode state.
+    if (_currentLanguage.length) {
+        UserDefineLangManager *udlMgr = [UserDefineLangManager shared];
+        UserDefinedLang *udl = [udlMgr languageNamed:_currentLanguage];
+        if (udl) {
+            // Default: re-apply the same UDL. Only re-resolve by extension
+            // (which picks the theme-matching variant for multi-variant UDLs
+            // like the markdown light/dark pair) when the *current* UDL
+            // actually claims this file's extension. Otherwise the user
+            // manually picked a UDL whose ext list doesn't include this
+            // file (an override) — respect that choice.
+            UserDefinedLang *target = udl;
+            NSString *ext = _filePath.pathExtension.lowercaseString;
+            if (ext.length) {
+                BOOL currentClaimsExt = NO;
+                for (NSString *e in [udl.extensions componentsSeparatedByString:@" "]) {
+                    if ([e.lowercaseString isEqualToString:ext]) {
+                        currentClaimsExt = YES;
+                        break;
+                    }
+                }
+                if (currentClaimsExt) {
+                    UserDefinedLang *resolved = [udlMgr languageForExtension:ext];
+                    if (resolved) target = resolved;
+                }
+            }
+            [udlMgr applyLanguage:target toScintillaView:_scintillaView];
+            _currentLanguage = [target.name copy];
+        } else {
+            [self applyLexerColors:_currentLanguage];
+        }
+    }
 
+    // Issue #149 — line spacing depends on SCI_TEXTHEIGHT, which depends on
+    // the font we just (re-)set. Recompute the extra ascent/descent here so
+    // a font/theme change resizes the line padding proportionally.
+    [self applyLineSpacingFromDefaults];
+}
+
+/// Issue #149 — apply the user's "Line spacing" multiplier (1.0/1.2/1.3/1.4/1.5)
+/// as extra ascent + descent in pixels, proportional to the current line height.
+/// Idempotent: resets extras to 0 before measuring so SCI_TEXTHEIGHT returns
+/// the *unmodified* base height (otherwise repeated calls would compound).
+/// Splits the total extra half-above / half-below so the caret stays visually
+/// centered between lines.
+- (void)applyLineSpacingFromDefaults {
+    ScintillaView *sci = _scintillaView;
+    if (!sci) return;
+    // Clear any prior extras first — guarantees SCI_TEXTHEIGHT returns the
+    // base (font-only) height, not a previously-inflated value.
+    [sci message:SCI_SETEXTRAASCENT  wParam:0 lParam:0];
+    [sci message:SCI_SETEXTRADESCENT wParam:0 lParam:0];
+
+    double mult = [[NSUserDefaults standardUserDefaults] doubleForKey:kPrefLineHeightMultiplier];
+    if (mult <= 1.0) return;  // 1.0 (or zero/missing pref) = no extras, no work
+
+    sptr_t baseH = [sci message:SCI_TEXTHEIGHT wParam:0 lParam:0];
+    if (baseH <= 0) return;   // pre-setup view; nothing to scale
+    sptr_t total = (sptr_t)llround((double)baseH * (mult - 1.0));
+    if (total <= 0) return;
+    sptr_t ascent  = total / 2;
+    sptr_t descent = total - ascent;
+    [sci message:SCI_SETEXTRAASCENT  wParam:(uptr_t)ascent  lParam:0];
+    [sci message:SCI_SETEXTRADESCENT wParam:(uptr_t)descent lParam:0];
 }
 
 /// Re-apply Global Styles that use Scintilla style IDs (STYLE_LINENUMBER=33,
@@ -1461,19 +1572,33 @@ static NSColor *nppColorFromHex(NSString *hex) {
     NPPStyleStore *storeD = [NPPStyleStore sharedStore];
     NSString *fontName = storeD.globalFontName;
     NSInteger fontSize = storeD.globalFontSize;
-    [sci message:SCI_STYLESETFONT wParam:STYLE_DEFAULT lParam:(sptr_t)fontName.UTF8String];
-    [sci message:SCI_STYLESETSIZEFRACTIONAL wParam:STYLE_DEFAULT lParam:(sptr_t)(fontSize * 100)];
     NSColor *fg = storeD.globalFg;
     NSColor *bg = storeD.globalBg;
+    NPPStyleEntry *gsDefault = [storeD globalStyleNamed:@"Default Style"];
+    BOOL defBold      = gsDefault.bold;
+    BOOL defItalic    = gsDefault.italic;
+    BOOL defUnderline = gsDefault.underline;
+
+    // Global override (issue #149) substitution for STYLE_DEFAULT — see
+    // -applyThemeColors for the rationale (Windows setStyle() applies the
+    // override to STYLE_DEFAULT too).
+    NPPStyleEntry *gov = [storeD globalStyleNamed:@"Global override"];
+    NSUserDefaults *_ud = [NSUserDefaults standardUserDefaults];
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableFg]       && gov.fgColor)         fg       = gov.fgColor;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableBg]       && gov.bgColor)         bg       = gov.bgColor;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableFont]     && gov.fontName.length>0) fontName = gov.fontName;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableFontSize] && gov.fontSize > 0)    fontSize = gov.fontSize;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableBold])      defBold      = gov.bold;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableItalic])    defItalic    = gov.italic;
+    if (gov && [_ud boolForKey:kPrefGlobalOverrideEnableUnderline]) defUnderline = gov.underline;
+
+    [sci message:SCI_STYLESETFONT wParam:STYLE_DEFAULT lParam:(sptr_t)fontName.UTF8String];
+    [sci message:SCI_STYLESETSIZEFRACTIONAL wParam:STYLE_DEFAULT lParam:(sptr_t)(fontSize * 100)];
     [sci setColorProperty:SCI_STYLESETFORE parameter:STYLE_DEFAULT value:fg];
     [sci setColorProperty:SCI_STYLESETBACK parameter:STYLE_DEFAULT value:bg];
-    // bold / italic / underline from the Global "Default Style" entry — must
-    // be set BEFORE STYLECLEARALL so propagation carries them to every other
-    // style. Mirrors the same fix in -applyThemeColors.
-    NPPStyleEntry *gsDefault = [storeD globalStyleNamed:@"Default Style"];
-    [sci message:SCI_STYLESETBOLD      wParam:STYLE_DEFAULT lParam:(gsDefault.bold      ? 1 : 0)];
-    [sci message:SCI_STYLESETITALIC    wParam:STYLE_DEFAULT lParam:(gsDefault.italic    ? 1 : 0)];
-    [sci message:SCI_STYLESETUNDERLINE wParam:STYLE_DEFAULT lParam:(gsDefault.underline ? 1 : 0)];
+    [sci message:SCI_STYLESETBOLD      wParam:STYLE_DEFAULT lParam:(defBold      ? 1 : 0)];
+    [sci message:SCI_STYLESETITALIC    wParam:STYLE_DEFAULT lParam:(defItalic    ? 1 : 0)];
+    [sci message:SCI_STYLESETUNDERLINE wParam:STYLE_DEFAULT lParam:(defUnderline ? 1 : 0)];
 
     // 2. Propagate STYLE_DEFAULT to ALL lexer styles (must come AFTER colors are set)
     [sci message:SCI_STYLECLEARALL];
@@ -1956,54 +2081,164 @@ static int vkToScintillaKey(int vk) {
     return vk;
 }
 
+// Accurate macOS default keymap for the Shortcut-Mapper commands — GENERATED from
+// the real Scintilla tables (scintilla/src/KeyMap.cxx MapDefault +
+// scintilla/cocoa/ScintillaCocoa.mm macMapDefault) by tools/gen_keymap.py. Maps each
+// command's sciID to the REAL key combo(s) that trigger it by default (keyDef =
+// sckKey | (mod<<16)), so an override can (a) clear the right keys — including
+// multi-bound commands like ⌘Up AND ⌘Home → DocumentStart — and (b) restore them on
+// reset. Built from the same source the editor's keymap is, so re-asserting these is
+// a byte-for-byte no-op at construction. Regenerate if the Scintilla tables change.
+static const struct SciDefaultKeys { int sciID; int n; sptr_t combos[4]; } kSciDefaultKeys[] = {
+    { 2013, 2, { 0x20041, 0x20061, 0, 0 } },  // SCI_SELECTALL
+    { 2180, 1, { 0x134, 0, 0, 0 } },  // SCI_CLEAR
+    { 2176, 2, { 0x2005A, 0x2007A, 0, 0 } },  // SCI_UNDO
+    { 2011, 2, { 0x20059, 0x3007A, 0, 0 } },  // SCI_REDO
+    { 2329, 2, { 0xD, 0x1000D, 0, 0 } },  // SCI_NEWLINE
+    { 2327, 1, { 0x9, 0, 0, 0 } },  // SCI_TAB
+    { 2328, 1, { 0x10009, 0, 0, 0 } },  // SCI_BACKTAB
+    { 2333, 1, { 0x20136, 0, 0, 0 } },  // SCI_ZOOMIN
+    { 2334, 1, { 0x20137, 0, 0, 0 } },  // SCI_ZOOMOUT
+    { 2373, 1, { 0x20138, 0, 0, 0 } },  // SCI_SETZOOM
+    { 2469, 2, { 0x20044, 0x20064, 0, 0 } },  // SCI_SELECTIONDUPLICATE
+    { 2324, 1, { 0x135, 0, 0, 0 } },  // SCI_EDITTOGGLEOVERTYPE
+    { 2300, 1, { 0x12C, 0, 0, 0 } },  // SCI_LINEDOWN
+    { 2301, 1, { 0x1012C, 0, 0, 0 } },  // SCI_LINEDOWNEXTEND
+    { 2426, 1, { 0x5012C, 0, 0, 0 } },  // SCI_LINEDOWNRECTEXTEND
+    { 2342, 1, { 0x10012C, 0, 0, 0 } },  // SCI_LINESCROLLDOWN
+    { 2302, 1, { 0x12D, 0, 0, 0 } },  // SCI_LINEUP
+    { 2303, 1, { 0x1012D, 0, 0, 0 } },  // SCI_LINEUPEXTEND
+    { 2427, 1, { 0x5012D, 0, 0, 0 } },  // SCI_LINEUPRECTEXTEND
+    { 2343, 1, { 0x10012D, 0, 0, 0 } },  // SCI_LINESCROLLUP
+    { 2413, 1, { 0x2005D, 0, 0, 0 } },  // SCI_PARADOWN
+    { 2414, 1, { 0x3005D, 0, 0, 0 } },  // SCI_PARADOWNEXTEND
+    { 2415, 1, { 0x2005B, 0, 0, 0 } },  // SCI_PARAUP
+    { 2416, 1, { 0x3005B, 0, 0, 0 } },  // SCI_PARAUPEXTEND
+    { 2304, 1, { 0x12E, 0, 0, 0 } },  // SCI_CHARLEFT
+    { 2305, 1, { 0x1012E, 0, 0, 0 } },  // SCI_CHARLEFTEXTEND
+    { 2428, 1, { 0x5012E, 0, 0, 0 } },  // SCI_CHARLEFTRECTEXTEND
+    { 2306, 1, { 0x12F, 0, 0, 0 } },  // SCI_CHARRIGHT
+    { 2307, 1, { 0x1012F, 0, 0, 0 } },  // SCI_CHARRIGHTEXTEND
+    { 2429, 1, { 0x5012F, 0, 0, 0 } },  // SCI_CHARRIGHTRECTEXTEND
+    { 2308, 2, { 0x4012E, 0x10012E, 0, 0 } },  // SCI_WORDLEFT
+    { 2309, 1, { 0x11012E, 0, 0, 0 } },  // SCI_WORDLEFTEXTEND
+    { 2310, 2, { 0x4012F, 0x10012F, 0, 0 } },  // SCI_WORDRIGHT
+    { 2311, 1, { 0x11012F, 0, 0, 0 } },  // SCI_WORDRIGHTEXTEND
+    { 2390, 1, { 0x2002F, 0, 0, 0 } },  // SCI_WORDPARTLEFT
+    { 2391, 1, { 0x3002F, 0, 0, 0 } },  // SCI_WORDPARTLEFTEXTEND
+    { 2392, 1, { 0x2005C, 0, 0, 0 } },  // SCI_WORDPARTRIGHT
+    { 2393, 1, { 0x3005C, 0, 0, 0 } },  // SCI_WORDPARTRIGHTEXTEND
+    { 2345, 1, { 0x40130, 0, 0, 0 } },  // SCI_HOMEDISPLAY
+    { 2331, 2, { 0x130, 0x2012E, 0, 0 } },  // SCI_VCHOME
+    { 2332, 2, { 0x10130, 0x3012E, 0, 0 } },  // SCI_VCHOMEEXTEND
+    { 2431, 1, { 0x50130, 0, 0, 0 } },  // SCI_VCHOMERECTEXTEND
+    { 2314, 2, { 0x131, 0x2012F, 0, 0 } },  // SCI_LINEEND
+    { 2315, 2, { 0x10131, 0x3012F, 0, 0 } },  // SCI_LINEENDEXTEND
+    { 2432, 1, { 0x50131, 0, 0, 0 } },  // SCI_LINEENDRECTEXTEND
+    { 2347, 1, { 0x40131, 0, 0, 0 } },  // SCI_LINEENDDISPLAY
+    { 2316, 2, { 0x2012D, 0x20130, 0, 0 } },  // SCI_DOCUMENTSTART
+    { 2317, 2, { 0x3012D, 0x30130, 0, 0 } },  // SCI_DOCUMENTSTARTEXTEND
+    { 2318, 2, { 0x2012C, 0x20131, 0, 0 } },  // SCI_DOCUMENTEND
+    { 2319, 2, { 0x3012C, 0x30131, 0, 0 } },  // SCI_DOCUMENTENDEXTEND
+    { 2320, 1, { 0x132, 0, 0, 0 } },  // SCI_PAGEUP
+    { 2321, 1, { 0x10132, 0, 0, 0 } },  // SCI_PAGEUPEXTEND
+    { 2433, 1, { 0x50132, 0, 0, 0 } },  // SCI_PAGEUPRECTEXTEND
+    { 2322, 1, { 0x133, 0, 0, 0 } },  // SCI_PAGEDOWN
+    { 2323, 1, { 0x10133, 0, 0, 0 } },  // SCI_PAGEDOWNEXTEND
+    { 2434, 1, { 0x50133, 0, 0, 0 } },  // SCI_PAGEDOWNRECTEXTEND
+    { 2326, 2, { 0x8, 0x10008, 0, 0 } },  // SCI_DELETEBACK
+    { 2335, 2, { 0x20008, 0x40008, 0, 0 } },  // SCI_DELWORDLEFT
+    { 2395, 1, { 0x30008, 0, 0, 0 } },  // SCI_DELLINELEFT
+    { 2396, 2, { 0x20134, 0x30134, 0, 0 } },  // SCI_DELLINERIGHT
+    { 2338, 2, { 0x3004C, 0x3006C, 0, 0 } },  // SCI_LINEDELETE
+    { 2337, 2, { 0x2004C, 0x2006C, 0, 0 } },  // SCI_LINECUT
+    { 2455, 2, { 0x30054, 0x30074, 0, 0 } },  // SCI_LINECOPY
+    { 2339, 2, { 0x20054, 0x20074, 0, 0 } },  // SCI_LINETRANSPOSE
+    { 2177, 3, { 0x10134, 0x20058, 0x20078, 0 } },  // SCI_CUT
+    { 2178, 3, { 0x20043, 0x20063, 0x20135, 0 } },  // SCI_COPY
+    { 2179, 3, { 0x10135, 0x20056, 0x20076, 0 } },  // SCI_PASTE
+    { 2325, 1, { 0x7, 0, 0, 0 } },  // SCI_CANCEL
+};
+
+static const struct SciDefaultKeys *sciDefaultKeysFor(int sciID) {
+    for (size_t i = 0; i < sizeof(kSciDefaultKeys)/sizeof(kSciDefaultKeys[0]); i++)
+        if (kSciDefaultKeys[i].sciID == sciID) return &kSciDefaultKeys[i];
+    return NULL;
+}
+
+// Push the user's Scintilla-command shortcut overrides (from ~/.nextpad++/shortcuts.xml)
+// into this editor's Scintilla keymap. Called once at construction and live on every
+// NPPShortcutsChangedNotification (via MainWindowController). Authoritative-per-command:
+// an overridden command's REAL default key(s) are cleared so the original stops firing,
+// then the user's key is bound — fixing both the "both work" and "no effect" bugs. With
+// no overrides (and none ever applied) it returns immediately, leaving the stock keymap
+// untouched, so non-customising users see zero change.
 - (void)applyScintillaKeyOverrides {
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
     NSData *data = [NSData dataWithContentsOfFile:path];
-    if (!data) return;
 
-    NSXMLDocument *doc = [[NSXMLDocument alloc] initWithData:data options:0 error:nil];
-    if (!doc) return;
-
-    NSArray *scintKeys = [doc nodesForXPath:@"//ScintillaKeys/ScintKey" error:nil];
-    if (!scintKeys.count) return;
-
-    ScintillaView *sci = _scintillaView;
-    NSInteger applied = 0;
-
-    for (NSXMLElement *sk in scintKeys) {
-        int sciID    = [[[sk attributeForName:@"ScintID"] stringValue] intValue];
-        int keyCode  = [[[sk attributeForName:@"Key"]     stringValue] intValue];
-        BOOL hasCtrl  = [[[sk attributeForName:@"Ctrl"]  stringValue] isEqualToString:@"yes"];
-        BOOL hasAlt   = [[[sk attributeForName:@"Alt"]   stringValue] isEqualToString:@"yes"];
-        BOOL hasShift = [[[sk attributeForName:@"Shift"] stringValue] isEqualToString:@"yes"];
-        BOOL hasCmd   = [[[sk attributeForName:@"Cmd"]   stringValue] isEqualToString:@"yes"];
-
-        // Backward compat: old files without Cmd attribute treat Ctrl as Command
-        if (!hasCmd && hasCtrl && ![sk attributeForName:@"Cmd"]) {
-            hasCmd = YES; hasCtrl = NO;
+    // Parse the overrides into a flat list first (sciID, keyCode, keyDef).
+    NSMutableArray<NSDictionary *> *overrides = [NSMutableArray array];
+    if (data) {
+        NSXMLDocument *doc = [[NSXMLDocument alloc] initWithData:data options:0 error:nil];
+        NSArray *scintKeys = doc ? [doc nodesForXPath:@"//ScintillaKeys/ScintKey" error:nil] : nil;
+        for (NSXMLElement *sk in scintKeys) {
+            int sciID   = [[[sk attributeForName:@"ScintID"] stringValue] intValue];
+            int keyCode = [[[sk attributeForName:@"Key"]     stringValue] intValue];
+            BOOL hasCtrl  = [[[sk attributeForName:@"Ctrl"]  stringValue] isEqualToString:@"yes"];
+            BOOL hasAlt   = [[[sk attributeForName:@"Alt"]   stringValue] isEqualToString:@"yes"];
+            BOOL hasShift = [[[sk attributeForName:@"Shift"] stringValue] isEqualToString:@"yes"];
+            BOOL hasCmd   = [[[sk attributeForName:@"Cmd"]   stringValue] isEqualToString:@"yes"];
+            // Backward compat: old files without Cmd attribute treat Ctrl as Command
+            if (!hasCmd && hasCtrl && ![sk attributeForName:@"Cmd"]) { hasCmd = YES; hasCtrl = NO; }
+            // On macOS Scintilla: Command → SCMOD_CTRL(2), Control → SCMOD_META(16)
+            int mods = 0;
+            if (hasCmd)   mods |= 2;
+            if (hasCtrl)  mods |= 16;
+            if (hasAlt)   mods |= 4;
+            if (hasShift) mods |= 1;
+            sptr_t keyDef = (sptr_t)vkToScintillaKey(keyCode) | (mods << 16);
+            [overrides addObject:@{ @"sciID": @(sciID), @"keyCode": @(keyCode), @"keyDef": @(keyDef) }];
         }
-
-        // On macOS Scintilla: Command → SCMOD_CTRL(2), Control → SCMOD_META(16)
-        int mods = 0;
-        if (hasCmd)   mods |= 2;   // SCMOD_CTRL (mapped from macOS Command)
-        if (hasCtrl)  mods |= 16;  // SCMOD_META (mapped from macOS Control)
-        if (hasAlt)   mods |= 4;   // SCMOD_ALT
-        if (hasShift) mods |= 1;   // SCMOD_SHIFT
-
-        int sckKey = vkToScintillaKey(keyCode);
-        sptr_t keyDef = sckKey | (mods << 16);
-
-        if (keyCode == 0) {
-            // Key=0 means "remove this binding" — clear it
-            [sci message:2071 wParam:(uptr_t)keyDef lParam:0]; // SCI_CLEARCMDKEY
-        } else {
-            [sci message:2070 wParam:(uptr_t)keyDef lParam:sciID]; // SCI_ASSIGNCMDKEY
-        }
-        applied++;
     }
 
-    if (applied > 0)
-        NSLog(@"[EditorView] Applied %ld Scintilla key override(s)", (long)applied);
+    BOOL hasOverrides = overrides.count > 0;
+    // Zero-impact guard: with no overrides and none ever applied to this editor, leave
+    // Scintilla's stock keymap exactly as constructed (identical to pre-Phase-2 behaviour).
+    if (!hasOverrides && !_scintillaOverridesApplied) return;
+
+    ScintillaView *sci = _scintillaView;
+
+    // Step A — restore every mapper command's REAL default key combo(s). Identity at
+    // construction (the keymap already holds them); on a live re-apply this undoes any
+    // default a prior override had cleared, so removing/resetting an override restores it.
+    for (size_t i = 0; i < sizeof(kSciDefaultKeys)/sizeof(kSciDefaultKeys[0]); i++) {
+        const struct SciDefaultKeys *d = &kSciDefaultKeys[i];
+        for (int j = 0; j < d->n; j++)
+            [sci message:2070 wParam:(uptr_t)d->combos[j] lParam:d->sciID]; // SCI_ASSIGNCMDKEY
+    }
+
+    // Step B — apply each override authoritatively: clear the command's default combo(s)
+    // so the original key stops firing (fixes "both work", incl. multi-bound commands),
+    // then bind the user's chosen key (or leave the command unbound if the user cleared it).
+    for (NSDictionary *o in overrides) {
+        int sciID   = [o[@"sciID"]   intValue];
+        int keyCode = [o[@"keyCode"] intValue];
+        const struct SciDefaultKeys *d = sciDefaultKeysFor(sciID);
+        if (d) for (int j = 0; j < d->n; j++)
+            [sci message:2071 wParam:(uptr_t)d->combos[j] lParam:0]; // SCI_CLEARCMDKEY
+        if (keyCode != 0)
+            [sci message:2070 wParam:(uptr_t)[o[@"keyDef"] longLongValue] lParam:sciID]; // SCI_ASSIGNCMDKEY
+    }
+
+    _scintillaOverridesApplied = hasOverrides;
+
+    // The RTL caret-key swap sits on top of the keymap; re-assert it if this editor is
+    // currently RTL, since Step A/B may have rewritten the Left/Right caret bindings.
+    if (self.isTextDirectionRTL) [self _applyRTLKeyBindings:YES];
+
+    NSLog(@"[EditorView] Scintilla key overrides: %lu applied%@",
+          (unsigned long)overrides.count, hasOverrides ? @"" : @" (none — defaults restored)");
 }
 
 #pragma mark - Preferences
@@ -2074,6 +2309,12 @@ static int vkToScintillaKey(int vk) {
     BOOL bsUnindent = [ud boolForKey:kPrefBackspaceUnindent];
     [sci message:SCI_SETBACKSPACEUNINDENTS wParam:bsUnindent ? 1 : 0];
     [sci message:SCI_SETTABINDENTS wParam:bsUnindent ? 1 : 0];
+
+    // Notepad++ "column selection to multi-editing": on Backspace/arrows a
+    // column (rectangular) selection is first converted to a stream
+    // multi-selection so the key acts per caret (e.g. Backspace at column 0
+    // joins lines). Handled in SCIContentView keyDown:.
+    sci.columnSelToMultiEdit = [ud boolForKey:kPrefColumnSel2MultiEdit];
 
     BOOL showLineNumbers = [ud boolForKey:kPrefShowLineNumbers];
     [sci message:SCI_SETMARGINWIDTHN wParam:0 lParam:showLineNumbers ? 44 : 0];
@@ -2206,6 +2447,21 @@ static int vkToScintillaKey(int vk) {
     // loadFileAtPath: so the new doc (post-Phase-2 always-swap) inherits the
     // user's setting.
     [self applyWordCharsFromDefaults];
+
+    // ── Clickable links (issue #133) ──
+    // Full-clear the whole document indicator then re-mark the visible range.
+    // This runs on pref changes (enable/style) and reloads — not on scroll —
+    // so a live toggle-off wipes stale links everywhere, not just on-screen.
+    {
+        ScintillaView *s = _scintillaView;
+        [s message:SCI_SETINDICATORCURRENT wParam:kClickableLinkIndicator];
+        [s message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[s message:SCI_GETLENGTH]];
+        [self updateClickableLinks];
+    }
+
+    // Issue #149 — apply line-spacing multiplier here too (idempotent with the
+    // applyThemeColors call). Covers pref changes that don't change the theme.
+    [self applyLineSpacingFromDefaults];
 }
 
 // Cached at first read so subsequent loads don't have to round-trip through
@@ -2407,6 +2663,10 @@ static const int kSpellIndicator = 17;
 // Git diff line-highlight indicator (slot 18, INDIC_FULLBOX, pink)
 static const int kGitDiffIndicator = 18;
 
+// Clickable-link indicator (slot 19, issue #133). Style derived from prefs
+// (underline vs colored text; fullbox hover).
+static const int kClickableLinkIndicator = 19;
+
 // Git gutter marker slots — must be 0-19 (0-24 are user-definable, but 21-24
 // are used by change-history and 25-31 are reserved for fold markers).
 static const int kGitMarkerAdded    = 6;
@@ -2430,19 +2690,70 @@ static const int kGitGutterMargin   = 4;  // margin index for git gutter
     NSArray<NPPStyleEntry *> *styles = [store stylesForLexer:lid];
     if (!styles.count) return;
 
+    // Global override (issue #149 — Windows parity). The source of the
+    // substituted values is the dedicated "Global override" row inside
+    // GlobalStyles — NOT "Default Style". Mirrors ScintillaEditView.cpp:900
+    // (findByName(L"Global override")). When an attribute is "transparent"
+    // on the override row (nil fg/bg, empty fontName, fontSize=0), the
+    // corresponding per-style attribute is left to fall back to STYLE_DEFAULT
+    // (we skip the SCI_STYLESET* call). Caller has just run STYLECLEARALL.
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    BOOL ovFg        = [d boolForKey:kPrefGlobalOverrideEnableFg];
+    BOOL ovBg        = [d boolForKey:kPrefGlobalOverrideEnableBg];
+    BOOL ovFont      = [d boolForKey:kPrefGlobalOverrideEnableFont];
+    BOOL ovFontSize  = [d boolForKey:kPrefGlobalOverrideEnableFontSize];
+    BOOL ovBold      = [d boolForKey:kPrefGlobalOverrideEnableBold];
+    BOOL ovItalic    = [d boolForKey:kPrefGlobalOverrideEnableItalic];
+    BOOL ovUnderline = [d boolForKey:kPrefGlobalOverrideEnableUnderline];
+    NPPStyleEntry *gov = (ovFg || ovBg || ovFont || ovFontSize ||
+                          ovBold || ovItalic || ovUnderline)
+                       ? [store globalStyleNamed:@"Global override"] : nil;
+
     for (NPPStyleEntry *e in styles) {
         int sid = e.styleID;
-        if (e.fgColor)
+
+        // fg
+        if (ovFg && gov) {
+            if (gov.fgColor)
+                [sci setColorProperty:SCI_STYLESETFORE parameter:sid value:gov.fgColor];
+            // else: leave at STYLE_DEFAULT (transparent override → inherit)
+        } else if (e.fgColor) {
             [sci setColorProperty:SCI_STYLESETFORE parameter:sid value:e.fgColor];
-        if (e.bgColor)
+        }
+
+        // bg
+        if (ovBg && gov) {
+            if (gov.bgColor)
+                [sci setColorProperty:SCI_STYLESETBACK parameter:sid value:gov.bgColor];
+        } else if (e.bgColor) {
             [sci setColorProperty:SCI_STYLESETBACK parameter:sid value:e.bgColor];
-        if (e.fontName.length > 0)
+        }
+
+        // font name
+        if (ovFont && gov) {
+            if (gov.fontName.length > 0)
+                [sci message:SCI_STYLESETFONT wParam:sid lParam:(sptr_t)gov.fontName.UTF8String];
+        } else if (e.fontName.length > 0) {
             [sci message:SCI_STYLESETFONT wParam:sid lParam:(sptr_t)e.fontName.UTF8String];
-        if (e.fontSize > 0)
+        }
+
+        // font size
+        if (ovFontSize && gov) {
+            if (gov.fontSize > 0)
+                [sci message:SCI_STYLESETSIZEFRACTIONAL wParam:sid lParam:(sptr_t)(gov.fontSize * 100)];
+        } else if (e.fontSize > 0) {
             [sci message:SCI_STYLESETSIZEFRACTIONAL wParam:sid lParam:(sptr_t)(e.fontSize * 100)];
-        [sci message:SCI_STYLESETBOLD      wParam:sid lParam:e.bold      ? 1 : 0];
-        [sci message:SCI_STYLESETITALIC    wParam:sid lParam:e.italic    ? 1 : 0];
-        [sci message:SCI_STYLESETUNDERLINE wParam:sid lParam:e.underline ? 1 : 0];
+        }
+
+        // bold / italic / underline — the override row's value substitutes
+        // directly. Caller already pushed STYLE_DEFAULT's font-style bits,
+        // so absent flags fall through to the default via STYLECLEARALL.
+        BOOL bold      = (ovBold      && gov) ? gov.bold      : e.bold;
+        BOOL italic    = (ovItalic    && gov) ? gov.italic    : e.italic;
+        BOOL underline = (ovUnderline && gov) ? gov.underline : e.underline;
+        [sci message:SCI_STYLESETBOLD      wParam:sid lParam:bold      ? 1 : 0];
+        [sci message:SCI_STYLESETITALIC    wParam:sid lParam:italic    ? 1 : 0];
+        [sci message:SCI_STYLESETUNDERLINE wParam:sid lParam:underline ? 1 : 0];
     }
 }
 
@@ -3306,11 +3617,356 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
     }
 }
 
+#pragma mark - Clickable Links (issue #133)
+
+// Compiles a regex matching any of the user's custom URI schemes followed by a
+// run of URL characters. Cached on the schemes string (a global pref) so we
+// don't recompile on every scroll. Main-thread only (all callers are UI).
+static NSRegularExpression *nppClickableSchemeRegex(NSString *schemes) {
+    static NSString *cachedSrc = nil;
+    static NSRegularExpression *cachedRegex = nil;
+    if (cachedSrc && [schemes isEqualToString:cachedSrc]) return cachedRegex;
+    cachedSrc = [schemes copy];
+    cachedRegex = nil;
+    NSArray *tokens = [schemes componentsSeparatedByCharactersInSet:
+                       [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSMutableArray *escaped = [NSMutableArray array];
+    for (NSString *t in tokens)
+        if (t.length) [escaped addObject:[NSRegularExpression escapedPatternForString:t]];
+    if (escaped.count) {
+        // Scheme alternation followed by one+ non-space, non-markup chars.
+        NSString *pattern = [NSString stringWithFormat:@"(?:%@)[^\\s<>\"'`]+",
+                             [escaped componentsJoinedByString:@"|"]];
+        cachedRegex = [NSRegularExpression regularExpressionWithPattern:pattern
+                                                               options:NSRegularExpressionCaseInsensitive
+                                                                 error:nil];
+    }
+    return cachedRegex;
+}
+
+// Sets the slot-19 indicator appearance from the current prefs. INDIC_TEXTFORE
+// colors the link text without an underline ("No underline" mode); INDIC_PLAIN
+// draws an underline. Fullbox mode draws a filled box on hover.
+- (void)_configureClickableLinkIndicator {
+    ScintillaView *sci = _scintillaView;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL noUnderline = [ud boolForKey:kPrefClickableLinkNoUnderline];
+    BOOL fullbox     = [ud boolForKey:kPrefClickableLinkFullBox];
+    int baseStyle  = noUnderline ? INDIC_TEXTFORE : INDIC_PLAIN;
+    int hoverStyle = fullbox ? INDIC_FULLBOX : baseStyle;
+    [sci message:SCI_INDICSETSTYLE        wParam:kClickableLinkIndicator lParam:baseStyle];
+    [sci message:SCI_INDICSETHOVERSTYLE   wParam:kClickableLinkIndicator lParam:hoverStyle];
+    [sci message:SCI_INDICSETFORE         wParam:kClickableLinkIndicator lParam:0xCC6600]; // #0066CC (BGR)
+    [sci message:SCI_INDICSETALPHA        wParam:kClickableLinkIndicator lParam:60];
+    [sci message:SCI_INDICSETOUTLINEALPHA wParam:kClickableLinkIndicator lParam:120];
+}
+
+// Re-mark clickable-link ranges within the currently visible viewport. Cheap:
+// only the on-screen byte range is scanned (mirrors Windows NPP addHotSpot).
+- (void)updateClickableLinks {
+    ScintillaView *sci = _scintillaView;
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+
+    [self _configureClickableLinkIndicator];
+
+    // Visible byte range — fold/wrap-aware via SCI_DOCLINEFROMVISIBLE.
+    sptr_t firstVisible  = [sci message:SCI_GETFIRSTVISIBLELINE];
+    sptr_t linesOnScreen = [sci message:SCI_LINESONSCREEN];
+    sptr_t lineCount     = [sci message:SCI_GETLINECOUNT];
+    sptr_t docFirst = [sci message:SCI_DOCLINEFROMVISIBLE wParam:(uptr_t)firstVisible];
+    sptr_t docLast  = [sci message:SCI_DOCLINEFROMVISIBLE
+                                 wParam:(uptr_t)(firstVisible + linesOnScreen + 1)];
+    if (docFirst < 0) docFirst = 0;
+    if (docLast >= lineCount) docLast = lineCount - 1;
+    if (docLast < docFirst) return;
+
+    sptr_t startPos = [sci message:SCI_POSITIONFROMLINE   wParam:(uptr_t)docFirst];
+    sptr_t endPos   = [sci message:SCI_GETLINEENDPOSITION wParam:(uptr_t)docLast];
+    if (endPos <= startPos) return;
+
+    // Bound the scan on pathologically long lines (minified bundles,
+    // single-line JSON/CSV, long log rows): the visible range is bounded by
+    // line *count*, but one line can be arbitrarily long, so a viewport filled
+    // by a single huge line would otherwise extract+scan megabytes on every
+    // keystroke/scroll. Cap to a fixed byte budget, backed off to a UTF-8 char
+    // boundary (skip continuation bytes 0x80–0xBF) so the buffer decodes
+    // cleanly. Links past the cap on such a line simply aren't marked.
+    static const sptr_t kMaxScanBytes = 128 * 1024;
+    if (endPos - startPos > kMaxScanBytes) {
+        endPos = startPos + kMaxScanBytes;
+        while (endPos > startPos &&
+               ((unsigned char)[sci message:SCI_GETCHARAT wParam:(uptr_t)endPos] & 0xC0) == 0x80)
+            endPos--;
+        if (endPos <= startPos) return;
+    }
+
+    // Clear the indicator across the visible range first.
+    [sci message:SCI_SETINDICATORCURRENT wParam:kClickableLinkIndicator];
+    [sci message:SCI_INDICATORCLEARRANGE wParam:(uptr_t)startPos lParam:(sptr_t)(endPos - startPos)];
+
+    if (![ud boolForKey:kPrefClickableLinkEnable]) return;
+    if (_largeFileMode && ![ud boolForKey:kPrefLargeFileAllowURLClick]) return;
+
+    // Extract visible text. Line boundaries are valid UTF-8 char boundaries,
+    // so the byte range decodes cleanly.
+    sptr_t len = endPos - startPos;
+    char *buf = (char *)malloc((size_t)len + 1);
+    if (!buf) return;
+    Sci_TextRangeFull tr;
+    tr.chrg.cpMin = (Sci_Position)startPos;
+    tr.chrg.cpMax = (Sci_Position)endPos;
+    tr.lpstrText  = buf;
+    [sci message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&tr];
+    NSString *text = [[NSString alloc] initWithBytes:buf length:(NSUInteger)len
+                                            encoding:NSUTF8StringEncoding];
+    free(buf);
+    if (!text.length) return;
+
+    // Map an NSString (UTF-16) sub-range to absolute document byte offsets and
+    // fill the indicator there.
+    void (^fillRange)(NSRange) = ^(NSRange r) {
+        if (r.length == 0) return;
+        NSUInteger byteStart = [[text substringToIndex:r.location]
+                                lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+        NSUInteger byteLen = [[text substringWithRange:r]
+                              lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+        if (byteLen == 0) return;
+        [sci message:SCI_INDICATORFILLRANGE
+                wParam:(uptr_t)(startPos + byteStart) lParam:(sptr_t)byteLen];
+    };
+
+    NSRange whole = NSMakeRange(0, text.length);
+
+    // 1) Standard web/mail links (http, https, ftp, mailto, bare www, …).
+    static NSDataDetector *detector = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        detector = [NSDataDetector dataDetectorWithTypes:NSTextCheckingTypeLink error:nil];
+    });
+    [detector enumerateMatchesInString:text options:0 range:whole
+                            usingBlock:^(NSTextCheckingResult *m, NSMatchingFlags flags, BOOL *stop) {
+        if (m.resultType == NSTextCheckingTypeLink && m.URL) fillRange(m.range);
+    }];
+
+    // 2) Custom URI schemes from prefs (svn://, git://, …) the detector misses.
+    NSRegularExpression *schemeRegex =
+        nppClickableSchemeRegex([ud stringForKey:kPrefClickableLinkSchemes] ?: @"");
+    if (schemeRegex) {
+        static NSCharacterSet *trailTrim = nil;
+        static dispatch_once_t trimOnce;
+        dispatch_once(&trimOnce, ^{
+            trailTrim = [NSCharacterSet characterSetWithCharactersInString:@".,;:!?)]}>'\""];
+        });
+        [schemeRegex enumerateMatchesInString:text options:0 range:whole
+                                   usingBlock:^(NSTextCheckingResult *m, NSMatchingFlags flags, BOOL *stop) {
+            NSRange r = m.range;
+            // Trim trailing sentence/markup punctuation that isn't part of the URL.
+            while (r.length > 0 &&
+                   [trailTrim characterIsMember:[text characterAtIndex:r.location + r.length - 1]])
+                r.length--;
+            fillRange(r);
+        }];
+    }
+}
+
+// Opens the clicked link if the double-click landed on a clickable-link
+// indicator. Returns YES if it handled the click (so the caller skips the
+// delimiter/word handlers). Only plain double-clicks (no modifiers) qualify —
+// ⌘ is reserved for delimiter selection.
+- (BOOL)_handleClickableLinkDoubleClick:(SCNotification *)notification {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if (![ud boolForKey:kPrefClickableLinkEnable]) return NO;
+    if (_largeFileMode && ![ud boolForKey:kPrefLargeFileAllowURLClick]) return NO;
+    if (notification->modifiers != 0) return NO;  // ⌘ etc. handled elsewhere
+
+    ScintillaView *sci = _scintillaView;
+    sptr_t pos = notification->position;
+    if (pos < 0) return NO;
+
+    sptr_t onMask = [sci message:SCI_INDICATORALLONFOR wParam:(uptr_t)pos];
+    if (!(onMask & (1 << kClickableLinkIndicator))) return NO;
+
+    sptr_t start = [sci message:SCI_INDICATORSTART wParam:kClickableLinkIndicator lParam:pos];
+    sptr_t end   = [sci message:SCI_INDICATOREND   wParam:kClickableLinkIndicator lParam:pos];
+    if (end <= start || pos < start || pos > end) return NO;
+
+    sptr_t len = end - start;
+    // Defensive: a real URL is never this long. A huge indicator run can only
+    // arise from a pathological no-whitespace line; don't extract megabytes.
+    if (len > 64 * 1024) return NO;
+    char *buf = (char *)malloc((size_t)len + 1);
+    if (!buf) return NO;
+    Sci_TextRangeFull tr;
+    tr.chrg.cpMin = (Sci_Position)start;
+    tr.chrg.cpMax = (Sci_Position)end;
+    tr.lpstrText  = buf;
+    [sci message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&tr];
+    NSString *urlText = [[NSString alloc] initWithBytes:buf length:(NSUInteger)len
+                                               encoding:NSUTF8StringEncoding];
+    free(buf);
+    if (!urlText.length) return NO;
+
+    // Collapse the word selection Scintilla made on double-click before we
+    // hand off to the browser (matches Windows NPP).
+    [sci message:SCI_SETSEL wParam:(uptr_t)pos lParam:pos];
+
+    NSURL *url = [self _urlFromLinkText:urlText];
+    if (url) [[NSWorkspace sharedWorkspace] openURL:url];
+    return YES;
+}
+
+// Builds an openable NSURL from highlighted link text. NSDataDetector
+// normalizes bare hosts (www.x.com → http://www.x.com); custom schemes fall
+// back to direct/percent-encoded construction.
+- (NSURL *)_urlFromLinkText:(NSString *)text {
+    static NSDataDetector *det = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        det = [NSDataDetector dataDetectorWithTypes:NSTextCheckingTypeLink error:nil];
+    });
+    NSTextCheckingResult *m = [det firstMatchInString:text options:0
+                                                range:NSMakeRange(0, text.length)];
+    if (m.URL && m.range.location == 0 && m.range.length == text.length)
+        return m.URL;
+
+    NSURL *u = [NSURL URLWithString:text];
+    if (u && u.scheme.length) return u;
+
+    NSString *enc = [text stringByAddingPercentEncodingWithAllowedCharacters:
+                     [NSCharacterSet URLFragmentAllowedCharacterSet]];
+    u = enc ? [NSURL URLWithString:enc] : nil;
+    return (u && u.scheme.length) ? u : nil;
+}
+
 #pragma mark - Macro Recording
 
 - (BOOL)isRecordingMacro { return _isRecordingMacro; }
 
 - (NSArray<NSDictionary *> *)macroActions { return [_macroActions copy]; }
+
+#pragma mark - Windows menu-command macro map (#166 Phase 2 — type 2)
+
+// Maps a Windows menu command id (IDM_*, from menuCmdID.h) to the equivalent
+// macOS action selector. Used when a type-2 macro action has an empty sParam
+// (Windows-recorded: the IDM_* is in wParam; macOS-recorded macros instead carry
+// the selector string in sParam). Only the common, macro-relevant commands are
+// mapped; unmapped ids are logged and skipped. Each selector below is verified
+// against MenuBuilder.mm.
+static NSString *_winMacroCmdSelector(long long idm) {
+    static NSDictionary<NSNumber *, NSString *> *map;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        map = @{
+            // ── File (IDM_FILE = 41000) ──
+            @41001: @"newDocument:",          // IDM_FILE_NEW
+            @41002: @"openDocument:",         // IDM_FILE_OPEN
+            @41003: @"closeCurrentTab:",      // IDM_FILE_CLOSE
+            @41004: @"closeAllTabs:",         // IDM_FILE_CLOSEALL
+            @41006: @"saveDocument:",         // IDM_FILE_SAVE
+            @41007: @"saveAllDocuments:",     // IDM_FILE_SAVEALL
+            @41008: @"saveDocumentAs:",       // IDM_FILE_SAVEAS
+            @41010: @"printDocument:",        // IDM_FILE_PRINT
+            @41014: @"reloadFromDisk:",       // IDM_FILE_RELOAD
+            // ── Edit (IDM_EDIT = 42000) ──
+            @42001: @"cut:",                  // IDM_EDIT_CUT
+            @42002: @"copy:",                 // IDM_EDIT_COPY
+            @42003: @"undo:",                 // IDM_EDIT_UNDO
+            @42004: @"redo:",                 // IDM_EDIT_REDO
+            @42005: @"paste:",                // IDM_EDIT_PASTE
+            @42006: @"delete:",               // IDM_EDIT_DELETE
+            @42007: @"selectAll:",            // IDM_EDIT_SELECTALL
+            @42010: @"duplicateLine:",        // IDM_EDIT_DUP_LINE
+            @42014: @"moveLineUp:",           // IDM_EDIT_LINE_UP
+            @42015: @"moveLineDown:",         // IDM_EDIT_LINE_DOWN
+            @42016: @"convertToUppercase:",   // IDM_EDIT_UPPERCASE
+            @42017: @"convertToLowercase:",   // IDM_EDIT_LOWERCASE
+            @42022: @"toggleLineComment:",    // IDM_EDIT_BLOCK_COMMENT (Ctrl+Q line toggle)
+            @42023: @"addBlockComment:",      // IDM_EDIT_STREAM_COMMENT (Ctrl+Shift+Q)
+            @42024: @"trimTrailingWhitespace:",// IDM_EDIT_TRIMTRAILING
+            @42047: @"removeBlockComment:",   // IDM_EDIT_STREAM_UNCOMMENT
+            // ── Search (IDM_SEARCH = 43000) ──
+            @43002: @"findNext:",             // IDM_SEARCH_FINDNEXT
+            @43010: @"findPrevious:",         // IDM_SEARCH_FINDPREV
+            // ── Format / EOL (IDM_FORMAT = 45000) ──
+            @45001: @"setEOLCRLF:",           // IDM_FORMAT_TODOS
+            @45002: @"setEOLLF:",             // IDM_FORMAT_TOUNIX
+            @45003: @"setEOLCR:",             // IDM_FORMAT_TOMAC
+        };
+    });
+    return map[@(idm)];
+}
+
+#pragma mark - Find/Replace macro replay (#166 — Windows mtSavedSnR / type 3)
+
+// Decode the 1702 booleans bitmask (Windows IDF_* control bits) into the options.
+- (void)_applySnRBooleans:(int)b toOptions:(NPPFindOptions *)o {
+    o.wholeWord         = (b & 1)    != 0;   // IDF_WHOLEWORD
+    o.matchCase         = (b & 2)    != 0;   // IDF_MATCHCASE
+    o.doPurge           = (b & 4)    != 0;   // IDF_PURGE_CHECK
+    o.doBookmarkLine    = (b & 16)   != 0;   // IDF_MARKLINE_CHECK
+    o.inSelection       = (b & 128)  != 0;   // IDF_IN_SELECTION_CHECK
+    o.wrapAround        = (b & 256)  != 0;   // IDF_WRAP
+    o.dotMatchesNewline = (b & 1024) != 0;   // IDF_REDOTMATCHNL
+    o.direction         = (b & 512) ? NPPSearchDown : NPPSearchUp;  // IDF_WHICH_DIRECTION (set=down)
+}
+
+// Run the accumulated Find/Replace operation for an EXEC (1701) command. The
+// macOS SearchEngine handles regex/extended modes and the #151 empty-match loop
+// semantics internally, so we just hand it the options.
+- (void)_execSnRCommand:(int)cmd options:(NPPFindOptions *)o {
+    if (!o) { NSLog(@"[Macro] Find/Replace EXEC with no pending options (skipped)"); return; }
+    if (!o.searchText.length) return;   // nothing to search for
+    ScintillaView *sci = _scintillaView;
+    // Replace All / Mark All operate on the WHOLE document (or the selection) by
+    // definition — Windows macros don't record a wrap bit for them. SearchEngine
+    // only covers the whole doc when wrapAround is set, so force it (unless the
+    // op is scoped to the selection), otherwise it would search only cursor→end.
+    if (!o.inSelection && (cmd == 1609 || cmd == 1615)) o.wrapAround = YES;
+    switch (cmd) {
+        case 1609: [SearchEngine replaceAllInView:sci options:o]; break;  // IDREPLACEALL
+        case 1608: [SearchEngine replaceInView:sci options:o];    break;  // IDREPLACE
+        case 1:    [SearchEngine findInView:sci options:o forward:(o.direction == NPPSearchDown)]; break; // IDOK (Find Next)
+        case 1615: [SearchEngine markAllInView:sci options:o];    break;  // IDCMARKALL
+        default:
+            // Find All / Count / Find-in-Files EXECs are not supported in v1.
+            NSLog(@"[Macro] unsupported Find/Replace command=%d (skipped)", cmd);
+    }
+}
+
+// Process one type-3 step. INIT(1700) starts a fresh op; field/option messages
+// fill it in; EXEC(1701) runs it and returns nil so the next op starts clean.
+// Returns the (possibly new) pending options to carry across loop iterations.
+- (NPPFindOptions *)_snrMacroStep:(int)msg lParam:(long long)lp
+                           sParam:(NSString *)sParam pending:(NPPFindOptions *)opts {
+    switch (msg) {
+        case 1700:  // IDC_FRCOMMAND_INIT
+            return [[NPPFindOptions alloc] init];
+        case 1601:  // IDFINDWHAT
+            if (!opts) opts = [[NPPFindOptions alloc] init];
+            opts.searchText = sParam ?: @"";
+            return opts;
+        case 1602:  // IDREPLACEWITH
+            if (!opts) opts = [[NPPFindOptions alloc] init];
+            opts.replaceText = sParam ?: @"";
+            return opts;
+        case 1625:  // IDNORMAL — search mode (0 Normal / 1 Extended / 2 Regex)
+            if (!opts) opts = [[NPPFindOptions alloc] init];
+            if (lp >= NPPSearchNormal && lp <= NPPSearchRegex) opts.searchType = (NPPSearchType)lp;
+            return opts;
+        case 1702:  // IDC_FRCOMMAND_BOOLEANS
+            if (!opts) opts = [[NPPFindOptions alloc] init];
+            [self _applySnRBooleans:(int)lp toOptions:opts];
+            return opts;
+        case 1701:  // IDC_FRCOMMAND_EXEC
+            [self _execSnRCommand:(int)lp options:opts];
+            return nil;
+        default:
+            // Find-in-Files dir/filters combos or unknown — not handled in v1;
+            // keep the pending op so a later EXEC still runs.
+            NSLog(@"[Macro] unsupported Find/Replace step message=%d (ignored)", msg);
+            return opts;
+    }
+}
 
 - (void)runMacroActions:(NSArray<NSDictionary *> *)actions {
     if (!actions.count) { NSBeep(); return; }
@@ -3333,6 +3989,10 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
     [tic deactivate];
 
     [sci message:SCI_BEGINUNDOACTION];
+    // #166 Phase 1: a type-3 (mtSavedSnR) Find/Replace operation spans several
+    // actions — INIT → set fields/options → EXEC. Accumulate them here; the
+    // helper builds/updates this and clears it on EXEC.
+    NPPFindOptions *snr = nil;
     for (NSDictionary *action in actions) {
         // ── Recorded format: menu command by selector name ──
         NSString *menuCmd = action[@"menuCommand"];
@@ -3359,8 +4019,15 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
             long long lp   = [action[@"lParam"] longLongValue];
             NSString *sParam = action[@"sParam"];
 
-            if (type == 2) {
-                // Menu command: sParam = macOS selector name
+            if (type == 3) {
+                // #166: Find/Replace step (mtSavedSnR) — Windows encodes a
+                // search/replace as a sequence of pseudo-messages routed to the
+                // Find dialog. Decode them into an NPPFindOptions and run the
+                // macOS SearchEngine on EXEC.
+                snr = [self _snrMacroStep:msg lParam:lp sParam:sParam pending:snr];
+            } else if (type == 2) {
+                // Menu command. macOS-recorded macros put the selector in sParam;
+                // Windows macros leave sParam empty and put the IDM_* in wParam.
                 if (sParam.length) {
                     if (wp != 0 && [sParam isEqualToString:@"pluginMenuAction:"]) {
                         // Plugin command: cmdID stored in wParam (see
@@ -3369,6 +4036,15 @@ static const int kIndicatorIncSearch = 28; // Scintilla indicator slot for incre
                     } else {
                         SEL menuAction = NSSelectorFromString(sParam);
                         [NSApp sendAction:menuAction to:nil from:self];
+                    }
+                } else {
+                    // Windows menu command (IDM_* in wParam, no selector) — resolve
+                    // via the IDM→selector map (#166 Phase 2); unmapped ids are logged.
+                    NSString *winSel = _winMacroCmdSelector(wp);
+                    if (winSel.length) {
+                        [NSApp sendAction:NSSelectorFromString(winSel) to:nil from:self];
+                    } else {
+                        NSLog(@"[Macro] Windows menu command IDM %lld not mapped — skipped", wp);
                     }
                 }
             } else if (type == 1 && sParam.length > 0) {
@@ -3858,6 +4534,10 @@ static NSSet<NSString *> *_cLikeLanguages() {
         case SCN_UPDATEUI:
             [self updateBraceHighlight];
             [self updateSmartHighlight];
+            // Re-mark links only when content or the viewport changed — a
+            // bare cursor move (selection-only) can't change link positions.
+            if (notification->updated & (SC_UPDATE_CONTENT | SC_UPDATE_V_SCROLL | SC_UPDATE_H_SCROLL))
+                [self updateClickableLinks];
             if (_spellCheckEnabled) [self _scheduleSpellCheck];
             [[NSNotificationCenter defaultCenter]
                 postNotificationName:EditorViewCursorDidMoveNotification
@@ -3884,7 +4564,10 @@ static NSSet<NSString *> *_cLikeLanguages() {
             }
             break;
         case SCN_DOUBLECLICK:
-            [self _handleDelimiterDoubleClick:notification];
+            // Plain double-click on a link opens it; otherwise fall through to
+            // the ⌘+double-click delimiter handler (and native word select).
+            if (![self _handleClickableLinkDoubleClick:notification])
+                [self _handleDelimiterDoubleClick:notification];
             break;
         case SCN_ZOOM:
             // Re-fit the line-number margin to the new zoom level so digits

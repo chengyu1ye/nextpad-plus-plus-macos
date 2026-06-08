@@ -43,14 +43,38 @@ extern NSString *const kPrefTabMaxLabelWidth;    // NSInteger pixels, default 19
 extern NSString *const kPrefTabCloseButton;      // BOOL, default YES
 extern NSString *const kPrefDoubleClickTabClose; // BOOL, default NO
 extern NSString *const kPrefTabBarWrap;          // BOOL, default NO
+extern NSString *const kPrefHideTabBar;          // BOOL, default NO — hide the tab bar entirely
 extern NSString *const kPrefVirtualSpace;        // BOOL, default NO
+extern NSString *const kPrefColumnSel2MultiEdit; // BOOL, default YES — column selection becomes multi-edit on Backspace/arrows
 extern NSString *const kPrefScrollBeyondLastLine;// BOOL, default NO
+extern NSString *const kPrefScrollSpeedGain;     // double, default 1.0 (1.0 = no mouse-wheel acceleration)
 extern NSString *const kPrefCaretBlinkRate;      // NSInteger ms, default 500
 extern NSString *const kPrefFontQuality;         // NSInteger 0-3, default 3 (LCD)
+extern NSString *const kPrefLineHeightMultiplier;// double, default 1.0; presets 1.0/1.2/1.3/1.4/1.5 (issue #149)
+// Global override — force attributes from Default Style across every style ID
+// (Windows: <GUIConfig name="globalOverride" .../>; see Parameters.cpp:6156).
+extern NSString *const kPrefGlobalOverrideEnableFg;       // BOOL, default NO
+extern NSString *const kPrefGlobalOverrideEnableBg;       // BOOL, default NO
+extern NSString *const kPrefGlobalOverrideEnableFont;     // BOOL, default NO
+extern NSString *const kPrefGlobalOverrideEnableFontSize; // BOOL, default NO
+extern NSString *const kPrefGlobalOverrideEnableBold;     // BOOL, default NO
+extern NSString *const kPrefGlobalOverrideEnableItalic;   // BOOL, default NO
+extern NSString *const kPrefGlobalOverrideEnableUnderline;// BOOL, default NO
 extern NSString *const kPrefCopyLineNoSelection; // BOOL, default YES
 extern NSString *const kPrefSmartHighlight;      // BOOL, default YES
 extern NSString *const kPrefFillFindWithSelection;// BOOL, default YES
 extern NSString *const kPrefFuncParamsHint;      // BOOL, default NO
+// Find window transparency (issue #143 — Windows "Transparency" parity).
+// The control lives in the Find/Replace tabs of FindWindow, not this prefs pane.
+extern NSString *const kPrefFindTransparencyEnabled; // BOOL, default YES
+extern NSString *const kPrefFindTransparencyMode;    // NSInteger 0=on losing focus, 1=always
+extern NSString *const kPrefFindTransparencyAlpha;   // double 0.2–0.9, default 0.5
+// Clickable links (issue #133 — Windows "Cloud & Link" parity). These persist
+// the setting; the link detection/highlight/open behavior is wired separately.
+extern NSString *const kPrefClickableLinkEnable;     // BOOL, default YES
+extern NSString *const kPrefClickableLinkNoUnderline;// BOOL, default NO
+extern NSString *const kPrefClickableLinkFullBox;    // BOOL, default NO — box hover style vs underline
+extern NSString *const kPrefClickableLinkSchemes;    // NSString — space-separated URI schemes
 // Tier 1 booleans
 extern NSString *const kPrefShowStatusBar;       // BOOL, default YES
 extern NSString *const kPrefMuteSounds;          // BOOL, default NO
@@ -61,6 +85,7 @@ extern NSString *const kPrefDisableTextDragDrop; // BOOL, default NO
 extern NSString *const kPrefMonoFontFind;        // BOOL, default NO
 extern NSString *const kPrefConfirmReplaceAll;   // BOOL, default YES
 extern NSString *const kPrefReplaceAndStop;      // BOOL, default NO
+extern NSString *const kPrefUseBoostRegex;       // BOOL, default NO (opt-in Boost.Regex backend)
 extern NSString *const kPrefSmartHiliteCase;     // BOOL, default NO
 extern NSString *const kPrefSmartHiliteWord;     // BOOL, default NO
 extern NSString *const kPrefDateTimeReverse;     // BOOL, default NO
@@ -79,6 +104,9 @@ extern NSString *const kPrefLineNumDynWidth;     // BOOL, default YES
 extern NSString *const kPrefInSelThreshold;      // NSInteger, default 1024
 extern NSString *const kPrefFuncListUseXML;      // BOOL, default YES — use XML parsers vs hardcoded regex
 extern NSString *const kPrefToolbarIconScale;    // double, 0.50/0.75/0.90/1.00/1.25/1.50, default 1.0 — restart required
+// File status auto-detection (PR #116 — Windows MISC parity)
+extern NSString *const kPrefFileStatusAutoDetection;  // BOOL, default YES — detect external on-disk changes
+extern NSString *const kPrefFileStatusUpdateSilently; // BOOL, default NO — auto-reload clean buffers (dirty still prompt)
 
 // Delimiter pane (issue #42) — two independent features sharing one prefs page,
 // mirroring Windows NPP. (1) "Word character list" extends Scintilla's word

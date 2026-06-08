@@ -1,6 +1,7 @@
 #import "NppTabBar.h"
 #import "NppThemeManager.h"
 #import "PreferencesWindowController.h"
+#import "NppLocalizer.h"   // match tab-menu items by normalized English title (locale-proof)
 
 @class _NppTabItem;
 
@@ -169,7 +170,8 @@ static const CGFloat kPinSize = 11.0; // pin icon drawn at ~80% of original ~14p
 - (void)drawRect:(NSRect)dirtyRect {
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
-    CGFloat r = 2.0;
+    // Tahoe: same top-corner rounding as the editor/panel cards (8pt). Classic: 2pt.
+    CGFloat r = TM.usesGlassMaterials ? 8.0 : 2.0;
 
     // ── Tab shape: rounded top corners, flat bottom ───────────────────────────
     NSBezierPath *tabPath = [NSBezierPath bezierPath];
@@ -184,7 +186,29 @@ static const CGFloat kPinSize = 11.0; // pin icon drawn at ~80% of original ~14p
     [tabPath closePath];
 
     // ── Fill ──────────────────────────────────────────────────────────────────
-    if (_isSelected) {
+    if (TM.usesGlassMaterials) {
+        // Tahoe: flat tabs. The per-tab color (the "apply color to tabs" feature)
+        // is painted as a full-tab TRANSLUCENT vertical gradient instead of the
+        // Classic 3px accent stripe; uncolored tabs stay neutral/flat. The Classic
+        // branch below is left byte-for-byte unchanged.
+        NSColor *base = tabColorForId(_colorId);          // nil when no custom color assigned
+        if (!base && _isSelected) base = accentColor();   // default active tab → Classic orange accent gradient
+        [NSGraphicsContext saveGraphicsState];
+        [tabPath addClip];
+        if (base) {
+            CGFloat topA = _isSelected ? 0.42 : (_hovered ? 0.30 : 0.22);
+            CGFloat botA = _isSelected ? 0.24 : (_hovered ? 0.16 : 0.12);
+            NSGradient *g = [[NSGradient alloc]
+                initWithStartingColor:[base colorWithAlphaComponent:topA]
+                          endingColor:[base colorWithAlphaComponent:botA]];
+            [g drawInRect:self.bounds angle:270];
+        } else if (_hovered) {
+            [TM.hoverTabFill setFill];
+            NSRectFill(self.bounds);
+        }
+        // inactive + uncolored → no fill (the flat bar background shows through)
+        [NSGraphicsContext restoreGraphicsState];
+    } else if (_isSelected) {
         [activeTabColor() setFill];
         [tabPath fill];
     } else {
@@ -198,20 +222,35 @@ static const CGFloat kPinSize = 11.0; // pin icon drawn at ~80% of original ~14p
     }
 
     // ── Border ────────────────────────────────────────────────────────────────
-    [tabBorderColor() setStroke];
+    if (TM.usesGlassMaterials) {
+        // Tahoe: a soft border only a few tones darker than the tab itself — for a
+        // colored tab a slightly stronger shade of its own color; for an uncolored
+        // tab a faint dark outline. (Classic keeps the grey tabBorder, untouched.)
+        NSColor *bbase = tabColorForId(_colorId);
+        if (!bbase && _isSelected) bbase = accentColor();
+        NSColor *bcol = bbase ? [bbase colorWithAlphaComponent:0.6]
+                              : [NSColor colorWithWhite:0.0 alpha:0.12];
+        [bcol setStroke];
+    } else {
+        [tabBorderColor() setStroke];
+    }
     tabPath.lineWidth = 0.5;
     [tabPath stroke];
 
-    // ── Accent stripe: 3px at top, clipped to tab shape ─────────────────────
+    // ── Accent stripe: 3px at top, clipped to tab shape (CLASSIC ONLY) ──────
     // Active tab always shows a stripe (per-tab color or default orange).
     // Inactive tabs with a color assigned also show the stripe.
-    NSColor *stripe = tabColorForId(_colorId) ?: accentColor();
-    if (_isSelected || _colorId >= 0) {
-        [NSGraphicsContext saveGraphicsState];
-        [tabPath addClip];
-        [stripe setFill];
-        NSRectFill(NSMakeRect(0, h - 3, w, 3));
-        [NSGraphicsContext restoreGraphicsState];
+    // Tahoe shows the per-tab color as a full-tab translucent tint (Fill above),
+    // so the stripe is suppressed there.
+    if (!TM.usesGlassMaterials) {
+        NSColor *stripe = tabColorForId(_colorId) ?: accentColor();
+        if (_isSelected || _colorId >= 0) {
+            [NSGraphicsContext saveGraphicsState];
+            [tabPath addClip];
+            [stripe setFill];
+            NSRectFill(NSMakeRect(0, h - 3, w, 3));
+            [NSGraphicsContext restoreGraphicsState];
+        }
     }
 
     // ── Floppy icon ───────────────────────────────────────────────────────────
@@ -446,6 +485,11 @@ static const CGFloat kPinSize = 11.0; // pin icon drawn at ~80% of original ~14p
 - (void)buildScrollView { /* init already called _buildUI */ }
 
 - (void)drawRect:(NSRect)dirtyRect {
+    if (TM.usesGlassMaterials) {
+        // Tahoe: transparent tab strip with no bottom separator — the window
+        // gradient shows behind the tabs. Gated; Classic keeps its #eeeeee fill.
+        return;
+    }
     [tabBarBgColor() setFill];
     NSRectFill(self.bounds);
     [[NSColor separatorColor] setFill];
@@ -561,6 +605,10 @@ static const CGFloat kPinSize = 11.0; // pin icon drawn at ~80% of original ~14p
 - (NSInteger)tabColorAtIndex:(NSInteger)index {
     if (index < 0 || index >= (NSInteger)_items.count) return -1;
     return _items[index].colorId;
+}
+
++ (nullable NSColor *)tabFillColorForId:(NSInteger)colorId {
+    return tabColorForId(colorId);
 }
 
 #pragma mark - Tab item callbacks
@@ -1075,17 +1123,17 @@ static const CGFloat kPinSize = 11.0; // pin icon drawn at ~80% of original ~14p
 
 /// Walk a menu recursively to find an item by title (case-insensitive, strips shortcuts).
 static NSMenuItem *_findMenuItemByTitle(NSMenu *menu, NSString *title) {
-    NSString *target = title.lowercaseString;
+    // Match against each item's ORIGINAL ENGLISH title (the localizer stashes it),
+    // normalized the same way the localizer normalizes — so this resolves the XML's
+    // English MenuItemName regardless of the active UI language AND irons out the
+    // "..." vs "…" / accelerator differences. (Old code compared the localized
+    // display title verbatim, which dropped every item in non-English languages
+    // and the ellipsis items even in English.)
+    NSString *target = [NppLocalizer normalizedTitleKey:title];
     for (NSMenuItem *mi in menu.itemArray) {
         if (mi.isSeparatorItem) continue;
-        // Strip keyboard shortcut suffix (everything after \t) and & accelerator markers
-        NSString *clean = mi.title;
-        NSRange tabR = [clean rangeOfString:@"\t"];
-        if (tabR.location != NSNotFound) clean = [clean substringToIndex:tabR.location];
-        clean = [clean stringByReplacingOccurrencesOfString:@"&" withString:@""];
-        clean = [clean stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-
-        if ([clean.lowercaseString isEqualToString:target]) return mi;
+        NSString *eng = [NppLocalizer englishTitleOfMenuItem:mi];
+        if ([[NppLocalizer normalizedTitleKey:eng] isEqualToString:target]) return mi;
 
         // Recurse into submenus
         if (mi.submenu) {
@@ -1141,11 +1189,20 @@ static NSMenu *_buildTabContextMenuFromXML(NSString *xmlPath) {
 
         if (!menuEntry.length || !menuItem.length) continue;
 
-        // Find the top-level menu matching MenuEntryName
+        // Find the top-level menu matching MenuEntryName by its ENGLISH title
+        // (locale-proof — the localized bar shows "Файл" etc., so a verbatim
+        // "File" compare failed in non-English languages and dropped every child).
         NSMenu *entryMenu = nil;
+        NSString *entryTarget = [NppLocalizer normalizedTitleKey:menuEntry];
         for (NSMenuItem *top in mainMenu.itemArray) {
-            NSString *title = top.submenu.title ?: top.title;
-            if ([title.lowercaseString isEqualToString:menuEntry.lowercaseString]) {
+            if (!top.submenu) continue;
+            // Top-level menu *items* have an empty title (the name "File"/"Edit"/…
+            // lives on the SUBMENU), so match the submenu's English title; fall
+            // back to the item's just in case.
+            NSString *engMenu = [NppLocalizer englishTitleOfMenu:top.submenu];
+            NSString *engItem = [NppLocalizer englishTitleOfMenuItem:top];
+            if ([[NppLocalizer normalizedTitleKey:engMenu] isEqualToString:entryTarget] ||
+                [[NppLocalizer normalizedTitleKey:engItem] isEqualToString:entryTarget]) {
                 entryMenu = top.submenu;
                 break;
             }

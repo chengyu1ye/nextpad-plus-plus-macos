@@ -24,6 +24,10 @@ extern NSNotificationName const EditorViewDidSaveNotification;
 /// Unique 1-based index for untitled tabs — mirrors NPP's per-buffer ID.
 @property (nonatomic, readonly) NSInteger untitledIndex;
 
+/// Custom display name for an UNTITLED tab, set via Rename (issue #177). When
+/// non-nil it overrides the "new N" name; ignored once the buffer has a filePath.
+@property (nonatomic, copy, nullable) NSString *customTabName;
+
 /// Path to the auto-backup copy in ~/.nextpad++/backup/ (nil if never backed up).
 @property (nonatomic, copy, nullable) NSString *backupFilePath;
 

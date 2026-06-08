@@ -2,6 +2,7 @@
 
 NSNotificationName const NPPDarkModeChangedNotification = @"NPPDarkModeChangedNotification";
 NSString *const kPrefDarkMode = @"NPPDarkMode";
+NSString *const kPrefAppearanceStyle = @"NPPAppearanceStyle";
 
 // ── Toolbar icon name mapping: standard name → Fluent name ──────────────────
 // To remap an icon: change the right-hand value only.
@@ -56,6 +57,8 @@ static NSDictionary<NSString *, NSString *> *toolbarIconMapping(void) {
     BOOL _cachedIsDark;
 }
 
+@synthesize appearanceStyle = _appearanceStyle;
+
 + (instancetype)shared {
     static NppThemeManager *inst;
     static dispatch_once_t once;
@@ -71,6 +74,10 @@ static NSDictionary<NSString *, NSString *> *toolbarIconMapping(void) {
         _mode = (NppDarkModeOption)saved;
         [self _recalcIsDark];
         [self _applyAppearance];
+
+        // Appearance profile (Auto/Classic/Tahoe). Absent integer key → 0 → Auto.
+        _appearanceStyle = (NppAppearanceStyle)[[NSUserDefaults standardUserDefaults]
+            integerForKey:kPrefAppearanceStyle];
 
         // Observe system appearance changes for Auto mode via distributed notification
         [[NSDistributedNotificationCenter defaultCenter]
@@ -153,6 +160,58 @@ static NSDictionary<NSString *, NSString *> *toolbarIconMapping(void) {
 }
 
 - (BOOL)isDark { return _cachedIsDark; }
+
+// ── Appearance Profile (Classic / Tahoe) ──────────────────────────────────────
+
+- (void)setAppearanceStyle:(NppAppearanceStyle)style {
+    _appearanceStyle = style;
+    [[NSUserDefaults standardUserDefaults] setInteger:style forKey:kPrefAppearanceStyle];
+    // No notification posted yet: switching the profile requires rebuilding the
+    // toolbar (not just re-skinning colors), and that live-rebuild path is wired
+    // in a later step. For now the profile is read when the toolbar is built, so
+    // a change takes effect on the next launch.
+}
+
+- (NppAppearanceStyle)effectiveAppearanceStyle {
+    switch (_appearanceStyle) {
+        case NppAppearanceTahoe:   return NppAppearanceTahoe;
+        case NppAppearanceClassic: return NppAppearanceClassic;
+        case NppAppearanceAuto:
+        default:
+            // Auto resolves to Classic until the Tahoe profile exists. When it
+            // does, this becomes: `if (@available(macOS 26.0, *)) return Tahoe;`
+            return NppAppearanceClassic;
+    }
+}
+
+// ── Tahoe presentation scaffolding (inert under Classic) ──────────────────────
+
+- (BOOL)usesGlassMaterials {
+    return self.effectiveAppearanceStyle == NppAppearanceTahoe;
+}
+
+- (NSVisualEffectMaterial)materialForRole:(NppMaterialRole)role {
+    // Tahoe materials. Only consulted when usesGlassMaterials == YES; the values
+    // may be refined in Step 3b/3c once seen against real glass.
+    switch (role) {
+        case NppMaterialRoleToolbar:     return NSVisualEffectMaterialHeaderView;
+        case NppMaterialRoleSidebar:     return NSVisualEffectMaterialSidebar;
+        case NppMaterialRolePanelHeader: return NSVisualEffectMaterialTitlebar;  // lighter/sleeker than HeaderView
+        case NppMaterialRoleStatusBar:   return NSVisualEffectMaterialUnderWindowBackground;
+    }
+    return NSVisualEffectMaterialWindowBackground;
+}
+
+- (NppToolbarMetrics)toolbarMetrics {
+    if (self.effectiveAppearanceStyle == NppAppearanceTahoe) {
+        // Relaxed placeholder — tuned in Step 3c against real glass.
+        return (NppToolbarMetrics){ .iconSize = 18, .buttonSize = 34,
+                                    .buttonSpacing = 6, .groupGap = 12, .cornerRadius = 7 };
+    }
+    // Classic — mirrors nppIconSize/nppBtnSize/nppSpacing/nppSepGap/nppToolbarCornerR.
+    return (NppToolbarMetrics){ .iconSize = 16, .buttonSize = 28,
+                                .buttonSpacing = 4, .groupGap = 9, .cornerRadius = 4.5 };
+}
 
 // ── Tab Bar Colors ───────────────────────────────────────────────────────────
 

@@ -603,6 +603,17 @@ static NSString *_userThemesDir(void) {
     NSTextField          *_fgLabel, *_bgLabel;
     NSPopUpButton        *_fontNamePopup, *_fontSizePopup;
     NSButton             *_boldCheck, *_italicCheck, *_underlineCheck;
+    // Global override "Force … for all styles" checkboxes (Windows parity).
+    // Hidden by default; shown only when the selected Style row is
+    // "Global override". The 7 boolean prefs (kPrefGlobalOverrideEnable*)
+    // back these — toggling re-skins all open editors via NPPPreferencesChanged.
+    NSButton             *_forceFgCheck, *_forceBgCheck;
+    NSButton             *_forceFontCheck, *_forceFontSizeCheck;
+    NSButton             *_forceBoldCheck, *_forceItalicCheck, *_forceUnderlineCheck;
+    // Snapshots for cancel-restore.
+    BOOL                  _backupOverrideFg, _backupOverrideBg;
+    BOOL                  _backupOverrideFont, _backupOverrideFontSize;
+    BOOL                  _backupOverrideBold, _backupOverrideItalic, _backupOverrideUnderline;
 
     // Working copy — edited by user; cancelled on Cancel; committed on Save
     NSMutableArray<NPPLexer *>  *_workingLexers;
@@ -717,8 +728,11 @@ static NSString *_userThemesDir(void) {
     _headerLabel.font = [NSFont boldSystemFontOfSize:13];
     [cv addSubview:_headerLabel];
 
-    CGFloat boxY = ry + 4;
-    CGFloat boxH = rh - 36;
+    // Boxes occupy the upper portion of the right pane; checkboxes for the
+    // Global override row live in the space below (issue #149 follow-up:
+    // mirrors Windows Style Configurator layout exactly).
+    CGFloat boxH = 200;
+    CGFloat boxY = ry + rh - 30 - boxH; // top edge sits ~30pt below header
     CGFloat csW  = rw * 0.45;
     CGFloat fsX  = rx + csW + 10;
     CGFloat fsW  = rw - csW - 10;
@@ -732,6 +746,65 @@ static NSString *_userThemesDir(void) {
     fontBox.title = [[NppLocalizer shared] translate:@"Font Style"];
     [cv addSubview:fontBox];
     [self _buildFontBox:fontBox];
+
+    // ── Global override "Force …" checkboxes (Windows parity) ──────────────
+    // Persistent controls; hidden by default and shown only when the selected
+    // Style row is "Global override". Placed below the colour/font boxes.
+    NppLocalizer *loc = [NppLocalizer shared];
+    CGFloat coY    = boxY - 28;                 // first row of colour-side checks
+    CGFloat coX    = rx + 6;                    // left aligned to colourBox
+    CGFloat coW    = csW - 12;                  // span colourBox column
+    CGFloat foX    = fsX + 6;                   // left aligned to fontBox
+    CGFloat foW    = fsW - 12;
+
+    _forceFgCheck = [NSButton checkboxWithTitle:
+        [loc translate:@"Force foreground color for all styles"]
+        target:self action:@selector(_forceFgChanged:)];
+    _forceFgCheck.frame = NSMakeRect(coX, coY, coW, 18);
+    [cv addSubview:_forceFgCheck];
+
+    _forceBgCheck = [NSButton checkboxWithTitle:
+        [loc translate:@"Force background color for all styles"]
+        target:self action:@selector(_forceBgChanged:)];
+    _forceBgCheck.frame = NSMakeRect(coX, coY - 22, coW, 18);
+    [cv addSubview:_forceBgCheck];
+
+    CGFloat foY = coY;
+    _forceFontCheck = [NSButton checkboxWithTitle:
+        [loc translate:@"Force font choice for all styles"]
+        target:self action:@selector(_forceFontChanged:)];
+    _forceFontCheck.frame = NSMakeRect(foX, foY, foW, 18);
+    [cv addSubview:_forceFontCheck];
+
+    _forceFontSizeCheck = [NSButton checkboxWithTitle:
+        [loc translate:@"Force font size choice for all styles"]
+        target:self action:@selector(_forceFontSizeChanged:)];
+    _forceFontSizeCheck.frame = NSMakeRect(foX, foY - 22, foW, 18);
+    [cv addSubview:_forceFontSizeCheck];
+
+    _forceBoldCheck = [NSButton checkboxWithTitle:
+        [loc translate:@"Force bold choice for all styles"]
+        target:self action:@selector(_forceBoldChanged:)];
+    _forceBoldCheck.frame = NSMakeRect(foX, foY - 44, foW, 18);
+    [cv addSubview:_forceBoldCheck];
+
+    _forceItalicCheck = [NSButton checkboxWithTitle:
+        [loc translate:@"Force italic choice for all styles"]
+        target:self action:@selector(_forceItalicChanged:)];
+    _forceItalicCheck.frame = NSMakeRect(foX, foY - 66, foW, 18);
+    [cv addSubview:_forceItalicCheck];
+
+    _forceUnderlineCheck = [NSButton checkboxWithTitle:
+        [loc translate:@"Force underline choice for all styles"]
+        target:self action:@selector(_forceUnderlineChanged:)];
+    _forceUnderlineCheck.frame = NSMakeRect(foX, foY - 88, foW, 18);
+    [cv addSubview:_forceUnderlineCheck];
+
+    // Start hidden — visibility flipped in -_updateRightPanelForStyle:.
+    for (NSButton *b in @[ _forceFgCheck, _forceBgCheck,
+                           _forceFontCheck, _forceFontSizeCheck,
+                           _forceBoldCheck, _forceItalicCheck, _forceUnderlineCheck ])
+        b.hidden = YES;
 
     // Buttons
     NSButton *cancelBtn = [NSButton buttonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]
@@ -910,7 +983,65 @@ static NSString *_userThemesDir(void) {
     _boldCheck.state      = entry.bold      ? NSControlStateValueOn : NSControlStateValueOff;
     _italicCheck.state    = entry.italic    ? NSControlStateValueOn : NSControlStateValueOff;
     _underlineCheck.state = entry.underline ? NSControlStateValueOn : NSControlStateValueOff;
+
+    // Global override row: reveal the 7 "Force …" checkboxes and seed their
+    // states from the persisted prefs (issue #149 — Windows parity).
+    BOOL isGlobalOverride = [entry.name isEqualToString:@"Global override"];
+    NSArray<NSButton *> *overrideChecks = @[
+        _forceFgCheck, _forceBgCheck,
+        _forceFontCheck, _forceFontSizeCheck,
+        _forceBoldCheck, _forceItalicCheck, _forceUnderlineCheck ];
+    for (NSButton *b in overrideChecks) b.hidden = !isGlobalOverride;
+    if (isGlobalOverride) {
+        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+        _forceFgCheck.state        = [d boolForKey:kPrefGlobalOverrideEnableFg]
+                                     ? NSControlStateValueOn : NSControlStateValueOff;
+        _forceBgCheck.state        = [d boolForKey:kPrefGlobalOverrideEnableBg]
+                                     ? NSControlStateValueOn : NSControlStateValueOff;
+        _forceFontCheck.state      = [d boolForKey:kPrefGlobalOverrideEnableFont]
+                                     ? NSControlStateValueOn : NSControlStateValueOff;
+        _forceFontSizeCheck.state  = [d boolForKey:kPrefGlobalOverrideEnableFontSize]
+                                     ? NSControlStateValueOn : NSControlStateValueOff;
+        _forceBoldCheck.state      = [d boolForKey:kPrefGlobalOverrideEnableBold]
+                                     ? NSControlStateValueOn : NSControlStateValueOff;
+        _forceItalicCheck.state    = [d boolForKey:kPrefGlobalOverrideEnableItalic]
+                                     ? NSControlStateValueOn : NSControlStateValueOff;
+        _forceUnderlineCheck.state = [d boolForKey:kPrefGlobalOverrideEnableUnderline]
+                                     ? NSControlStateValueOn : NSControlStateValueOff;
+    }
     _suppressActions = NO;
+}
+
+// Persist new checkbox state, then re-skin every open editor by re-pushing
+// the current working lexer set through previewLexers (same notification
+// path that fg/bg/font edits already use).
+- (void)_writeOverridePref:(NSString *)key fromCheckbox:(NSButton *)cb {
+    if (_suppressActions) return;
+    [[NSUserDefaults standardUserDefaults]
+        setBool:(cb.state == NSControlStateValueOn) forKey:key];
+    [[NPPStyleStore sharedStore] previewLexers:_workingLexers];
+}
+
+- (void)_forceFgChanged:(id)sender {
+    [self _writeOverridePref:kPrefGlobalOverrideEnableFg fromCheckbox:_forceFgCheck];
+}
+- (void)_forceBgChanged:(id)sender {
+    [self _writeOverridePref:kPrefGlobalOverrideEnableBg fromCheckbox:_forceBgCheck];
+}
+- (void)_forceFontChanged:(id)sender {
+    [self _writeOverridePref:kPrefGlobalOverrideEnableFont fromCheckbox:_forceFontCheck];
+}
+- (void)_forceFontSizeChanged:(id)sender {
+    [self _writeOverridePref:kPrefGlobalOverrideEnableFontSize fromCheckbox:_forceFontSizeCheck];
+}
+- (void)_forceBoldChanged:(id)sender {
+    [self _writeOverridePref:kPrefGlobalOverrideEnableBold fromCheckbox:_forceBoldCheck];
+}
+- (void)_forceItalicChanged:(id)sender {
+    [self _writeOverridePref:kPrefGlobalOverrideEnableItalic fromCheckbox:_forceItalicCheck];
+}
+- (void)_forceUnderlineChanged:(id)sender {
+    [self _writeOverridePref:kPrefGlobalOverrideEnableUnderline fromCheckbox:_forceUnderlineCheck];
 }
 
 // ── NSTableViewDataSource ─────────────────────────────────────────────────────
@@ -1034,6 +1165,17 @@ static NSString *_userThemesDir(void) {
     // Restore state that was active when window was opened
     if (_cancelBackup) {
         [NPPStyleStore sharedStore].activeThemeName = _cancelTheme ?: kDefaultThemeName;
+        // Roll the Global override flags back to their snapshot before
+        // re-pushing the lexer set, so the resulting re-skin matches the
+        // state the user saw on open.
+        NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+        [d setBool:_backupOverrideFg        forKey:kPrefGlobalOverrideEnableFg];
+        [d setBool:_backupOverrideBg        forKey:kPrefGlobalOverrideEnableBg];
+        [d setBool:_backupOverrideFont      forKey:kPrefGlobalOverrideEnableFont];
+        [d setBool:_backupOverrideFontSize  forKey:kPrefGlobalOverrideEnableFontSize];
+        [d setBool:_backupOverrideBold      forKey:kPrefGlobalOverrideEnableBold];
+        [d setBool:_backupOverrideItalic    forKey:kPrefGlobalOverrideEnableItalic];
+        [d setBool:_backupOverrideUnderline forKey:kPrefGlobalOverrideEnableUnderline];
         [[NPPStyleStore sharedStore] previewLexers:_cancelBackup];
     }
     [self.window close];
@@ -1113,6 +1255,16 @@ static NSString *_userThemesDir(void) {
     for (NPPLexer *lex in store.allLexers) [backup addObject:[lex copy]];
     _cancelBackup = [backup copy];
     _cancelTheme  = store.activeThemeName ?: kDefaultThemeName;
+
+    // Snapshot Global override checkbox prefs — restored on Cancel.
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    _backupOverrideFg        = [d boolForKey:kPrefGlobalOverrideEnableFg];
+    _backupOverrideBg        = [d boolForKey:kPrefGlobalOverrideEnableBg];
+    _backupOverrideFont      = [d boolForKey:kPrefGlobalOverrideEnableFont];
+    _backupOverrideFontSize  = [d boolForKey:kPrefGlobalOverrideEnableFontSize];
+    _backupOverrideBold      = [d boolForKey:kPrefGlobalOverrideEnableBold];
+    _backupOverrideItalic    = [d boolForKey:kPrefGlobalOverrideEnableItalic];
+    _backupOverrideUnderline = [d boolForKey:kPrefGlobalOverrideEnableUnderline];
 
     // Populate theme popup
     [self _populateThemePopup];

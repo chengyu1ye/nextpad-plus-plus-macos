@@ -36,6 +36,13 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
     // Disable the macOS press-and-hold accent picker so key repeat works in the editor.
     [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"ApplePressAndHoldEnabled"];
 
+    // Issue #126 — wire the "Open with Nextpad++" Finder service. The NSServices
+    // entry in Info.plist declares the menu item; this registers the object that
+    // receives the file URLs. NSUpdateDynamicServices() nudges the system to pick
+    // it up promptly (notably right after a fresh install).
+    [NSApp setServicesProvider:self];
+    NSUpdateDynamicServices();
+
     // Load config.xml preferences before building UI (applies saved XML → NSUserDefaults)
     readConfigXML();
 
@@ -484,6 +491,44 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
         [mwc bringWindowForward];
     }
     [sender replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
+}
+
+/// Issue #126 — "Open with Nextpad++" Finder service handler. Declared via
+/// NSServices in Info.plist (NSMessage=openFilesService). Finder places the
+/// selected items on the pasteboard as file URLs; we route them through the
+/// same open path as Apple-event opens (folder expansion + window surfacing),
+/// so files and folders behave identically to a Finder double-click / drag.
+- (void)openFilesService:(NSPasteboard *)pboard
+                userData:(NSString *)userData
+                   error:(NSString **)error {
+    NSArray *objs = [pboard readObjectsForClasses:@[[NSURL class]]
+                                          options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    NSMutableArray<NSString *> *paths = [NSMutableArray array];
+    for (NSURL *url in objs) {
+        if (url.isFileURL && url.path.length) [paths addObject:url.path];
+    }
+    // Fallback: a sender that only supplied a plain string path.
+    if (paths.count == 0) {
+        NSString *s = [pboard stringForType:NSPasteboardTypeString];
+        if (s.length) [paths addObject:s];
+    }
+    if (paths.count == 0) return;
+
+    // Service can cold-start the app: queue until launch completes, where
+    // applicationDidFinishLaunching drains _pendingFilePaths (with folder
+    // expansion) and surfaces the window.
+    if (!_didFinishLaunching) {
+        [_pendingFilePaths addObjectsFromArray:paths];
+        return;
+    }
+
+    NSArray<NSString *> *files = [self _expandFolderArguments:paths];
+    if (files.count == 0) return;  // empty folder, or large-open declined
+    MainWindowController *mwc = [self _activeWindowController];
+    for (NSString *path in files) {
+        [mwc openFileAtPath:path];
+    }
+    [mwc bringWindowForward];  // activates Nextpad++ over Finder
 }
 
 /// Returns the window controller for the key window, or mainWindowController as fallback.

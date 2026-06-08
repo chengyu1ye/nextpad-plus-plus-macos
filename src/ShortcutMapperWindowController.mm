@@ -21,6 +21,7 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
 @property (assign) NSInteger  commandID;        // IDM_* or SCI_* or index
 @property (copy, nullable) NSString *selectorName; // macOS selector string
 @property (assign) BOOL isModified;             // user changed from default
+@property (assign) BOOL isMenuShadowed;         // Scintilla cmd shadowed by a same-key NSMenu item (info-only highlight)
 @end
 
 @implementation ShortcutEntry
@@ -124,6 +125,22 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
         @",":@188, @"-":@189, @".":@190, @"/":@191, @"`":@192, @"[":@219, @"\\":@220,
         @"]":@221, @"'":@222};
     return [map[name] unsignedIntegerValue];
+}
+@end
+
+// Table row view that washes a row with a faint orange tint — used to flag the
+// menu-shadowed Scintilla commands. The colour is the Tahoe tab-bar "Orange"
+// (#F5B67A) at ~20% alpha so it reads as a subtle highlight in light and dark.
+@interface _SCMRowView : NSTableRowView
+@property (nonatomic) BOOL tinted;
+@end
+@implementation _SCMRowView
+- (void)drawBackgroundInRect:(NSRect)dirtyRect {
+    [super drawBackgroundInRect:dirtyRect];
+    if (_tinted) {
+        [[NSColor colorWithRed:0xF5/255.0 green:0xB6/255.0 blue:0x7A/255.0 alpha:0.20] set];
+        NSRectFillUsingOperation(self.bounds, NSCompositingOperationSourceOver);
+    }
 }
 @end
 
@@ -610,9 +627,11 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
         {"SCI_MOVECARETINSIDEVIEW",  2401, NO,  NO,  NO,  0},
         {"SCI_LINEDOWN",             2300, NO,  NO,  NO,  40},  // Down
         {"SCI_LINEDOWNEXTEND",       2301, NO,  NO,  YES, 40},
+        {"SCI_LINEDOWNRECTEXTEND",   2426, NO,  YES, YES, 40},  // Opt+Shift+Down
         {"SCI_LINESCROLLDOWN",       2342, YES, NO,  NO,  40},
         {"SCI_LINEUP",               2302, NO,  NO,  NO,  38},  // Up
         {"SCI_LINEUPEXTEND",         2303, NO,  NO,  YES, 38},
+        {"SCI_LINEUPRECTEXTEND",     2427, NO,  YES, YES, 38},  // Opt+Shift+Up
         {"SCI_LINESCROLLUP",         2343, YES, NO,  NO,  38},
         {"SCI_PARADOWN",             2413, YES, NO,  NO,  221}, // ]
         {"SCI_PARADOWNEXTEND",       2414, YES, NO,  YES, 221},
@@ -620,30 +639,53 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
         {"SCI_PARAUPEXTEND",         2416, YES, NO,  YES, 219},
         {"SCI_CHARLEFT",             2304, NO,  NO,  NO,  37},  // Left
         {"SCI_CHARLEFTEXTEND",       2305, NO,  NO,  YES, 37},
+        {"SCI_CHARLEFTRECTEXTEND",   2428, NO,  YES, YES, 37},  // Opt+Shift+Left
         {"SCI_CHARRIGHT",            2306, NO,  NO,  NO,  39},  // Right
         {"SCI_CHARRIGHTEXTEND",      2307, NO,  NO,  YES, 39},
+        {"SCI_CHARRIGHTRECTEXTEND",  2429, NO,  YES, YES, 39},  // Opt+Shift+Right
         {"SCI_WORDLEFT",             2308, YES, NO,  NO,  37},
         {"SCI_WORDLEFTEXTEND",       2309, YES, NO,  YES, 37},
+        {"SCI_WORDLEFTEND",          2439, NO,  NO,  NO,  0},
+        {"SCI_WORDLEFTENDEXTEND",    2440, NO,  NO,  NO,  0},
         {"SCI_WORDRIGHT",            2310, YES, NO,  NO,  39},
         {"SCI_WORDRIGHTEXTEND",      2311, YES, NO,  YES, 39},
+        {"SCI_WORDRIGHTEND",         2441, NO,  NO,  NO,  0},
+        {"SCI_WORDRIGHTENDEXTEND",   2442, NO,  NO,  NO,  0},
         {"SCI_WORDPARTLEFT",         2390, YES, NO,  NO,  191},
         {"SCI_WORDPARTLEFTEXTEND",   2391, YES, NO,  YES, 191},
         {"SCI_WORDPARTRIGHT",        2392, YES, NO,  NO,  220},
         {"SCI_WORDPARTRIGHTEXTEND",  2393, YES, NO,  YES, 220},
         {"SCI_HOME",                 2312, NO,  NO,  NO,  36},
         {"SCI_HOMEEXTEND",           2313, NO,  NO,  YES, 36},
+        {"SCI_HOMERECTEXTEND",       2430, NO,  NO,  NO,  0},
+        {"SCI_HOMEDISPLAY",          2345, NO,  YES, NO,  36},  // Opt+Home
+        {"SCI_HOMEDISPLAYEXTEND",    2346, NO,  NO,  NO,  0},
+        {"SCI_HOMEWRAP",             2349, NO,  NO,  NO,  0},
+        {"SCI_HOMEWRAPEXTEND",       2450, NO,  NO,  NO,  0},
         {"SCI_VCHOME",               2331, NO,  NO,  NO,  0},
         {"SCI_VCHOMEEXTEND",         2332, NO,  NO,  NO,  0},
+        {"SCI_VCHOMERECTEXTEND",     2431, NO,  YES, YES, 36},  // Opt+Shift+Home
+        {"SCI_VCHOMEDISPLAY",        2652, NO,  NO,  NO,  0},
+        {"SCI_VCHOMEDISPLAYEXTEND",  2653, NO,  NO,  NO,  0},
+        {"SCI_VCHOMEWRAP",           2453, NO,  NO,  NO,  0},
+        {"SCI_VCHOMEWRAPEXTEND",     2454, NO,  NO,  NO,  0},
         {"SCI_LINEEND",              2314, NO,  NO,  NO,  35},
         {"SCI_LINEENDEXTEND",        2315, NO,  NO,  YES, 35},
+        {"SCI_LINEENDRECTEXTEND",    2432, NO,  YES, YES, 35},  // Opt+Shift+End
+        {"SCI_LINEENDDISPLAY",       2347, NO,  YES, NO,  35},  // Opt+End
+        {"SCI_LINEENDDISPLAYEXTEND", 2348, NO,  NO,  NO,  0},
+        {"SCI_LINEENDWRAP",          2451, NO,  NO,  NO,  0},
+        {"SCI_LINEENDWRAPEXTEND",    2452, NO,  NO,  NO,  0},
         {"SCI_DOCUMENTSTART",        2316, YES, NO,  NO,  36},
         {"SCI_DOCUMENTSTARTEXTEND",  2317, YES, NO,  YES, 36},
         {"SCI_DOCUMENTEND",          2318, YES, NO,  NO,  35},
         {"SCI_DOCUMENTENDEXTEND",    2319, YES, NO,  YES, 35},
         {"SCI_PAGEUP",               2320, NO,  NO,  NO,  33},
         {"SCI_PAGEUPEXTEND",         2321, NO,  NO,  YES, 33},
+        {"SCI_PAGEUPRECTEXTEND",     2433, NO,  YES, YES, 33},  // Opt+Shift+PageUp
         {"SCI_PAGEDOWN",             2322, NO,  NO,  NO,  34},
         {"SCI_PAGEDOWNEXTEND",       2323, NO,  NO,  YES, 34},
+        {"SCI_PAGEDOWNRECTEXTEND",   2434, NO,  YES, YES, 34},  // Opt+Shift+PageDown
         {"SCI_DELETEBACK",           2326, NO,  NO,  NO,  8},
         {"SCI_DELETEBACKNOTLINE",    2344, NO,  NO,  NO,  0},
         {"SCI_DELWORDLEFT",          2335, YES, NO,  NO,  8},
@@ -654,6 +696,7 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
         {"SCI_LINECUT",              2337, YES, NO,  NO,  'L'},
         {"SCI_LINECOPY",             2455, YES, NO,  YES, 'X'},
         {"SCI_LINETRANSPOSE",        2339, YES, NO,  NO,  'T'},
+        {"SCI_LINEDUPLICATE",        2404, NO,  NO,  NO,  0},
         {"SCI_CUT",                  2177, YES, NO,  NO,  'X'},
         {"SCI_COPY",                 2178, YES, NO,  NO,  'C'},
         {"SCI_PASTE",                2179, YES, NO,  NO,  'V'},
@@ -662,6 +705,8 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
         {"SCI_STUTTEREDPAGEUPEXTEND",2436, NO,  NO,  NO,  0},
         {"SCI_STUTTEREDPAGEDOWN",    2437, NO,  NO,  NO,  0},
         {"SCI_STUTTEREDPAGEDOWNEXTEND",2438,NO, NO,  NO,  0},
+        {"SCI_SWAPMAINANCHORCARET",  2607, NO,  NO,  NO,  0},
+        {"SCI_ROTATESELECTION",      2606, NO,  NO,  NO,  0},
     };
     // Read existing overrides from shortcuts.xml
     NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
@@ -704,6 +749,22 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
             e.hasAlt   = defs[i].alt;
             e.hasShift = defs[i].shift;
             e.keyCode  = defs[i].key;
+        }
+        // The 6 standard-edit commands whose Scintilla-tab shortcut sits on the EXACT
+        // same key as a Cocoa Edit-menu item (Select All ⌘A, Undo ⌘Z, Redo ⌘⇧Z, Cut ⌘X,
+        // Copy ⌘C, Paste ⌘V). AppKit fires the menu first, so changing them here is a
+        // no-op — they're highlighted to signal that. They stay editable (info-only).
+        // (Zoom/SelectionDuplicate are NOT included: their Scintilla keys differ from the
+        // menu's ⌘+/⌘-/⌘0/⌘D, so those overrides actually take effect.)
+        switch (defs[i].sciID) {
+            case 2013: // SCI_SELECTALL
+            case 2176: // SCI_UNDO
+            case 2011: // SCI_REDO
+            case 2177: // SCI_CUT
+            case 2178: // SCI_COPY
+            case 2179: // SCI_PASTE
+                e.isMenuShadowed = YES; break;
+            default: break;
         }
         [e updateDisplay];
         [_scintillaEntries addObject:e];
@@ -786,6 +847,15 @@ NSNotificationName const NPPShortcutsChangedNotification = @"NPPShortcutsChanged
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
     return (NSInteger)_filteredEntries.count;
+}
+
+// Returns a row view that paints a subtle orange wash behind menu-shadowed Scintilla
+// commands (see _loadScintillaEntries) so users can tell those rows are menu-driven.
+- (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
+    _SCMRowView *rv = [tableView makeViewWithIdentifier:@"SCMRow" owner:nil];
+    if (!rv) { rv = [[_SCMRowView alloc] init]; rv.identifier = @"SCMRow"; }
+    rv.tinted = (row >= 0 && row < (NSInteger)_filteredEntries.count) && _filteredEntries[row].isMenuShadowed;
+    return rv;
 }
 
 - (NSView *)tableView:(NSTableView *)tableView viewForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {

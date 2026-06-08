@@ -40,6 +40,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setTabColorAtIndex:(NSInteger)index colorId:(NSInteger)colorId;
 /// Returns the color identifier for the tab at index (-1 if none).
 - (NSInteger)tabColorAtIndex:(NSInteger)index;
+/// The fill NSColor for a color identifier (0–4), or nil for -1/none. Lets other
+/// UI (e.g. the Document List) tint records to match a colored tab.
++ (nullable NSColor *)tabFillColorForId:(NSInteger)colorId;
 
 /// When YES tabs wrap to multiple rows instead of scrolling horizontally.
 /// The view's intrinsic height grows to fit all rows.

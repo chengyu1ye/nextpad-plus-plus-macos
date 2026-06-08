@@ -8,11 +8,43 @@ extern NSNotificationName const NPPDarkModeChangedNotification;
 /// Preference key for dark mode setting (Auto/Light/Dark).
 extern NSString *const kPrefDarkMode;
 
+/// Preference key for the UI appearance style (Auto/Classic/Tahoe). Default Auto.
+extern NSString *const kPrefAppearanceStyle;
+
 typedef NS_ENUM(NSInteger, NppDarkModeOption) {
     NppDarkModeAuto  = 0,  // Follow macOS system appearance
     NppDarkModeLight = 1,  // Always light
     NppDarkModeDark  = 2,  // Always dark
 };
+
+/// UI appearance profile — the "structure stays, chrome swaps" axis (orthogonal
+/// to light/dark). Classic = today's dense pro toolbar/chrome; Tahoe = native
+/// macOS "Liquid Glass" profile (in development). Auto follows the OS.
+typedef NS_ENUM(NSInteger, NppAppearanceStyle) {
+    NppAppearanceAuto    = 0,  // Follow OS (resolves to Classic for now; Tahoe-on-macOS-26 lands later)
+    NppAppearanceClassic = 1,  // Always the classic profile
+    NppAppearanceTahoe   = 2,  // Native Liquid Glass profile
+};
+
+/// Chrome regions that adopt translucent materials in the Tahoe profile. Used by
+/// -materialForRole: (Step 3b/3c). Inert under Classic (usesGlassMaterials == NO).
+typedef NS_ENUM(NSInteger, NppMaterialRole) {
+    NppMaterialRoleToolbar     = 0,  // unified toolbar / title-bar region
+    NppMaterialRoleSidebar     = 1,  // side-panel host
+    NppMaterialRolePanelHeader = 2,  // PanelFrame header
+    NppMaterialRoleStatusBar   = 3,  // bottom status bar
+};
+
+/// Per-profile toolbar metrics, in points. Classic mirrors today's compact values
+/// (nppIconSize/nppBtnSize/nppSpacing/nppSepGap/nppToolbarCornerR); Tahoe returns
+/// relaxed values. Consumed by the Tahoe toolbar builder (Step 3c).
+typedef struct {
+    CGFloat iconSize;
+    CGFloat buttonSize;
+    CGFloat buttonSpacing;
+    CGFloat groupGap;
+    CGFloat cornerRadius;
+} NppToolbarMetrics;
 
 /// Centralized theme manager. All UI components query this for colors and icon paths.
 /// Never hardcode colors — always go through NppThemeManager.
@@ -25,6 +57,29 @@ typedef NS_ENUM(NSInteger, NppDarkModeOption) {
 
 /// YES if the effective appearance is currently dark.
 @property (nonatomic, readonly) BOOL isDark;
+
+/// Raw user preference for the appearance profile (Auto/Classic/Tahoe). Setting
+/// this persists it. (Live switching / toolbar rebuild is wired in a later step;
+/// for now the value is read when the toolbar is built.)
+@property (nonatomic) NppAppearanceStyle appearanceStyle;
+
+/// The appearance profile the UI should actually render. Resolves Auto. Currently
+/// always Classic unless the user explicitly forces Tahoe; the Auto→Tahoe-on-
+/// macOS-26 resolution is enabled once the Tahoe profile is built.
+@property (nonatomic, readonly) NppAppearanceStyle effectiveAppearanceStyle;
+
+// ── Tahoe presentation scaffolding (inert under Classic) ──────────────────────
+
+/// YES when chrome should use translucent NSVisualEffectView materials (Tahoe).
+/// NO for Classic — chrome stays opaque exactly as today.
+@property (nonatomic, readonly) BOOL usesGlassMaterials;
+
+/// The NSVisualEffectView material for a chrome role. Only meaningful when
+/// usesGlassMaterials is YES; callers gate on that before applying it.
+- (NSVisualEffectMaterial)materialForRole:(NppMaterialRole)role;
+
+/// Toolbar metrics for the effective profile (see NppToolbarMetrics).
+@property (nonatomic, readonly) NppToolbarMetrics toolbarMetrics;
 
 // ── UI Colors ────────────────────────────────────────────────────────────────
 

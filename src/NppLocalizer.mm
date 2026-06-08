@@ -630,6 +630,10 @@ static NSString *normalizeForLookup(NSString *s) {
         @"general":                        @"dlgattr:Preference_Global:title",
         @"new document":                   @"dlgattr:Preference_NewDoc:title",
         @"backup":                         @"dlgattr:Preference_Backup:title",
+        // macOS displays "Cloud and Link"; the Windows XML title is "Cloud & Link"
+        // (a single & is dropped as a mnemonic by normalizeForLookup, so the
+        // plain-English name never matches the harvested key — alias it here).
+        @"cloud and link":                 @"dlgattr:Preference_Cloud:title",
 
         // Window menu
         @"sort by":                        @"submenu:window-sortby",
@@ -722,6 +726,22 @@ static const char kOriginalSubmenuTitleKey = 0;
         item.title = stored;
     }
     // If no stored title and no translation: leave the title as-is (already English).
+}
+
++ (NSString *)englishTitleOfMenuItem:(NSMenuItem *)item {
+    if (!item) return @"";
+    NSString *stored = objc_getAssociatedObject(item, &kOriginalTitleKey);
+    return stored ?: (item.title ?: @"");
+}
+
++ (NSString *)englishTitleOfMenu:(NSMenu *)menu {
+    if (!menu) return @"";
+    NSString *stored = objc_getAssociatedObject(menu, &kOriginalSubmenuTitleKey);
+    return stored ?: (menu.title ?: @"");
+}
+
++ (NSString *)normalizedTitleKey:(NSString *)title {
+    return title.length ? normalizeForLookup(title) : @"";
 }
 
 // ---------------------------------------------------------------------------

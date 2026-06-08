@@ -28,17 +28,41 @@ set(SCI_COCOA_SRCS
     "${SCI_ROOT}/cocoa/InfoBar.mm"
 )
 
-add_library(scintilla STATIC ${SCI_CORE_SRCS} ${SCI_COCOA_SRCS})
+# regex/  is this repo's SCI_OWNREGEX implementation — see regex/NppRegexSearch.cxx.
+# Mirrors Notepad++ Windows's `boostregex/` sibling-directory pattern. We compile
+# BOTH backends and a small selector picks one at runtime (RegexBackendSelect.cxx):
+#   * NppRegexSearch.cxx   — per-line std::regex (default, "Use Boost Regex" off)
+#   * BoostRegExSearch.cxx — whole-buffer Boost.Regex (opt-in, Windows parity:
+#                            multi-line, lookbehind, \K). Header-only Boost subset
+#                            vendored under regex/boost/ (BOOST_REGEX_STANDALONE).
+# With SCI_OWNREGEX defined, Scintilla's built-in CreateRegexSearch() compiles out
+# and the linker picks up the selector's one.
+set(NPP_REGEX_ROOT "${CMAKE_SOURCE_DIR}/regex")
+set(NPP_REGEX_SRCS
+    "${NPP_REGEX_ROOT}/NppRegexSearch.cxx"
+    "${NPP_REGEX_ROOT}/BoostRegExSearch.cxx"
+    "${NPP_REGEX_ROOT}/UTF8DocumentIterator.cxx"
+    "${NPP_REGEX_ROOT}/RegexBackendSelect.cxx"
+)
+
+add_library(scintilla STATIC ${SCI_CORE_SRCS} ${SCI_COCOA_SRCS} ${NPP_REGEX_SRCS})
 
 target_include_directories(scintilla PUBLIC
     "${SCI_ROOT}/include"
     "${SCI_ROOT}/src"
     "${SCI_ROOT}/cocoa"
 )
+target_include_directories(scintilla PRIVATE
+    # contains boost/ — boost headers self-include as <boost/...>, so the root
+    # (not boost/ itself) goes on the include path
+    "${NPP_REGEX_ROOT}"
+)
 
 target_compile_definitions(scintilla PRIVATE
     SCI_NAMESPACE
+    SCI_OWNREGEX
     SCINTILLA_QT=0
+    BOOST_REGEX_STANDALONE
 )
 
 set_source_files_properties(${SCI_COCOA_SRCS} PROPERTIES
@@ -82,6 +106,7 @@ set(APP_SRCS
     src/NppLangsManager.mm
     src/AppDelegate.mm
     src/MainWindowController.mm
+    src/TahoeToolbarConfig.mm
     src/EditorView.mm
     src/TabManager.mm
     src/NppTabBar.mm
@@ -99,6 +124,8 @@ set(APP_SRCS
     src/DocumentMapPanel.mm
     src/ProjectPanel.mm
     src/SearchEngine.mm
+    src/NPPBatchRunner.mm
+    src/NPPBatchDialog.mm
     src/SearchResultsPanel.mm
     src/FindWindow.mm
     src/StyleConfiguratorWindowController.mm
@@ -113,6 +140,7 @@ set(APP_SRCS
     src/UDLStylerDialog.mm
     src/NppPluginManager.mm
     src/PluginsAdminWindowController.mm
+    src/NppBuiltinLanguages.mm
 )
 
 set(APP_HEADERS
@@ -152,15 +180,20 @@ set(APP_HEADERS
     src/NppPluginManager.h
     src/NppPluginInterfaceMac.h
     src/PluginsAdminWindowController.h
+    src/NppBuiltinLanguages.h
 )
 
 add_executable(NotepadPlusPlusMac MACOSX_BUNDLE ${APP_SRCS} ${APP_HEADERS})
 
-# Copy icons at BUILD time so updated PNGs are picked up on every make, not just cmake re-run
+# Copy icons at BUILD time so updated PNGs are picked up on every make.
+# IMPORTANT: rsync -a (not `cmake -E copy_directory`) — copy_directory does NOT
+# overwrite existing files in the destination, so a refreshed PNG sitting next
+# to a stale copy in the bundle was silently skipped on incremental builds.
+# rsync -a archive-mirrors the source tree, overwriting any older bundle copy.
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/resources/icons"
-        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/icons"
+    COMMAND /usr/bin/rsync -a
+        "${CMAKE_SOURCE_DIR}/resources/icons/"
+        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/icons/"
     COMMENT "Syncing icons into app bundle")
 
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
@@ -196,9 +229,9 @@ add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
     COMMENT "Copying langs.model.xml into bundle")
 
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/resources/themes"
-        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/themes"
+    COMMAND /usr/bin/rsync -a
+        "${CMAKE_SOURCE_DIR}/resources/themes/"
+        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/themes/"
     COMMENT "Copying theme XML files into bundle")
 
 # Bundle localization XML files (Windows NPP format, unmodified).
@@ -207,23 +240,23 @@ add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
 #   ~/Library/Application Support/Nextpad++/localization/
 # to add languages without touching the app bundle.
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/resources/localization"
-        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/localization"
+    COMMAND /usr/bin/rsync -a
+        "${CMAKE_SOURCE_DIR}/resources/localization/"
+        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/localization/"
     COMMENT "Copying localization XML files into bundle")
 
 # Function List parser definitions (XML, same format as Windows NPP)
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/resources/functionList"
-        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/functionList"
+    COMMAND /usr/bin/rsync -a
+        "${CMAKE_SOURCE_DIR}/resources/functionList/"
+        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/functionList/"
     COMMENT "Copying function list parser XMLs into bundle")
 
 # Pre-installed User Defined Language files
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${CMAKE_SOURCE_DIR}/resources/userDefineLangs"
-        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/userDefineLangs"
+    COMMAND /usr/bin/rsync -a
+        "${CMAKE_SOURCE_DIR}/resources/userDefineLangs/"
+        "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/userDefineLangs/"
     COMMENT "Copying pre-installed UDL files into bundle")
 
 # Default shortcuts.xml (copied to ~/.nextpad++/ on first run if missing)
@@ -432,8 +465,8 @@ set_target_properties(NotepadPlusPlusMac PROPERTIES
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/resources/Info.plist"
     MACOSX_BUNDLE_BUNDLE_NAME "Nextpad++"
     MACOSX_BUNDLE_GUI_IDENTIFIER "org.nextpadplusplus.mac"
-    MACOSX_BUNDLE_BUNDLE_VERSION "1.0.7"
-    MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.7"
+    MACOSX_BUNDLE_BUNDLE_VERSION "1.0.8"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0.8"
 )
 
 target_include_directories(NotepadPlusPlusMac PRIVATE

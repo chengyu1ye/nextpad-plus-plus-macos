@@ -204,6 +204,11 @@ static NSImage *_PFLoadIcon(NSString *name) {
     _PFPopButton  *_popButton;
     _PFCloseButton *_closeButton;
     NSBox         *_separator;
+    // Tahoe-only (gated on usesGlassMaterials): a glass material backing behind
+    // the title-bar content. nil under Classic, so the Classic header (an opaque
+    // tabBarBackground layer) is byte-for-byte unchanged.
+    NSVisualEffectView *_headerVFX;
+    CGFloat        _headerH;       // title-bar height: 24 Classic / 28 Tahoe (sleeker)
     NSView        *_contentView;  // strong — we own the view we wrap
     // Collapsible chrome: when `popped`, both of these flip to 0 so the
     // content view takes over the full frame and there's no "double title
@@ -237,6 +242,10 @@ static NSImage *_PFLoadIcon(NSString *name) {
 
 - (void)_buildLayout {
     self.translatesAutoresizingMaskIntoConstraints = NO;
+    // 24pt header / 11pt title / 6pt leading for both profiles. Tahoe keeps the
+    // glass header material + white body (applied in _applyThemeColors) but matches
+    // Classic's compact metrics.
+    _headerH = 24.0;
 
     // Title bar
     _titleBar = [[NSView alloc] init];
@@ -246,7 +255,7 @@ static NSImage *_PFLoadIcon(NSString *name) {
 
     _titleLabel = [NSTextField labelWithString:@""];
     _titleLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    _titleLabel.font = [NSFont systemFontOfSize:11];
+    _titleLabel.font = [NSFont systemFontOfSize:11.0];
     _titleLabel.textColor = [NSColor labelColor];
     _titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [_titleBar addSubview:_titleLabel];
@@ -277,7 +286,7 @@ static NSImage *_PFLoadIcon(NSString *name) {
     _contentView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_contentView];
 
-    _titleBarHeight  = [_titleBar.heightAnchor  constraintEqualToConstant:24];
+    _titleBarHeight  = [_titleBar.heightAnchor  constraintEqualToConstant:_headerH];
     _separatorHeight = [_separator.heightAnchor constraintEqualToConstant:1];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -287,7 +296,7 @@ static NSImage *_PFLoadIcon(NSString *name) {
         [_titleBar.trailingAnchor  constraintEqualToAnchor:self.trailingAnchor],
         _titleBarHeight,
 
-        [_titleLabel.leadingAnchor  constraintEqualToAnchor:_titleBar.leadingAnchor constant:6],
+        [_titleLabel.leadingAnchor  constraintEqualToAnchor:_titleBar.leadingAnchor constant:6.0],
         [_titleLabel.centerYAnchor  constraintEqualToAnchor:_titleBar.centerYAnchor],
         [_titleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:_popButton.leadingAnchor constant:-4],
 
@@ -315,6 +324,25 @@ static NSImage *_PFLoadIcon(NSString *name) {
         [_contentView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],
         [_contentView.bottomAnchor   constraintEqualToAnchor:self.bottomAnchor],
     ]];
+
+    // Tahoe: a Liquid-Glass material behind the header, inserted BELOW the
+    // existing title-bar content (label + buttons render on top). Gated on
+    // usesGlassMaterials, so it's never created under Classic and the Classic
+    // header (an opaque tabBarBackground layer) stays byte-for-byte unchanged.
+    if ([NppThemeManager shared].usesGlassMaterials) {
+        _headerVFX = [[NSVisualEffectView alloc] init];
+        _headerVFX.translatesAutoresizingMaskIntoConstraints = NO;
+        _headerVFX.material     = [[NppThemeManager shared] materialForRole:NppMaterialRolePanelHeader];
+        _headerVFX.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+        _headerVFX.state        = NSVisualEffectStateActive;
+        [_titleBar addSubview:_headerVFX positioned:NSWindowBelow relativeTo:nil];
+        [NSLayoutConstraint activateConstraints:@[
+            [_headerVFX.topAnchor      constraintEqualToAnchor:_titleBar.topAnchor],
+            [_headerVFX.leadingAnchor  constraintEqualToAnchor:_titleBar.leadingAnchor],
+            [_headerVFX.trailingAnchor constraintEqualToAnchor:_titleBar.trailingAnchor],
+            [_headerVFX.bottomAnchor   constraintEqualToAnchor:_titleBar.bottomAnchor],
+        ]];
+    }
 }
 
 - (void)_closeClicked:(id)sender {
@@ -357,7 +385,7 @@ static NSImage *_PFLoadIcon(NSString *name) {
         _titleBar.hidden  = YES;
         _separator.hidden = YES;
     } else {
-        _titleBarHeight.constant = 24;
+        _titleBarHeight.constant = _headerH;
         _separatorHeight.constant = 1;
         _titleBar.hidden  = NO;
         _separator.hidden = NO;
@@ -377,7 +405,19 @@ static NSImage *_PFLoadIcon(NSString *name) {
 // ── Theme ─────────────────────────────────────────────────────────────────
 
 - (void)_applyThemeColors {
-    _titleBar.layer.backgroundColor = [NppThemeManager shared].tabBarBackground.CGColor;
+    if ([NppThemeManager shared].usesGlassMaterials) {
+        // Tahoe: the glass _headerVFX provides the header background, so keep the
+        // title-bar layer clear and let the material show through.
+        _titleBar.layer.backgroundColor = NSColor.clearColor.CGColor;
+        _headerVFX.material = [[NppThemeManager shared] materialForRole:NppMaterialRolePanelHeader];
+        // Opaque white body so each panel's content — including its transparent
+        // action/search row — reads as white, not the window gradient. The header
+        // VFX renders on top; the rounded side-panel host clips this.
+        self.wantsLayer = YES;
+        self.layer.backgroundColor = [NppThemeManager shared].panelBackground.CGColor;
+    } else {
+        _titleBar.layer.backgroundColor = [NppThemeManager shared].tabBarBackground.CGColor;
+    }
 }
 
 - (void)_darkModeChanged:(NSNotification *)n {
