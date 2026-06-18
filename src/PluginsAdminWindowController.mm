@@ -1,4 +1,5 @@
 #import "PluginsAdminWindowController.h"
+#import "NppPaths.h"
 #import "NppPluginManager.h"
 #import "NppLocalizer.h"
 #import <CommonCrypto/CommonDigest.h>
@@ -31,7 +32,7 @@
 @property (nonatomic, copy) NSString *macNppMinVersion;   // minimum host version
 
 // Runtime-only state populated by the Updates-tab scanner.
-@property (nonatomic, copy) NSString *installedDylibSHA;  // sha256(~/.nextpad++/plugins/<folder>/<folder>.dylib)
+@property (nonatomic, copy) NSString *installedDylibSHA;  // sha256(~/Library/Application Support/Nextpad++/plugins/<folder>/<folder>.dylib)
 @property (nonatomic, copy) NSString *installedDylibDate; // YYYY-MM-DD of that file's mtime
 @end
 
@@ -575,8 +576,7 @@ static NSString *const kPluginListVersion = @"0.2.0";
             catalogByFolder[pe.folderName] = pe;
     }
 
-    NSString *pluginsDir = [NSHomeDirectory()
-        stringByAppendingPathComponent:@".nextpad++/plugins"];
+    NSString *pluginsDir = NppConfigSubpath(@"plugins");
 
     for (NppPluginEntry *ip in _installed) {
         NppPluginEntry *c = catalogByFolder[ip.folderName];
@@ -609,7 +609,7 @@ static NSString *const kPluginListVersion = @"0.2.0";
 
 - (void)scanInstalledPlugins {
     [_installed removeAllObjects];
-    NSString *pluginsDir = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins"];
+    NSString *pluginsDir = NppConfigSubpath(@"plugins");
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *subdirs = [fm contentsOfDirectoryAtPath:pluginsDir error:nil];
 
@@ -711,8 +711,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
 // one hash and one stat per installed dylib. Called when the user opens
 // the Updates tab; re-run on each open so we pick up any manual edits.
 - (void)refreshInstalledDylibFingerprints {
-    NSString *pluginsDir = [NSHomeDirectory()
-        stringByAppendingPathComponent:@".nextpad++/plugins"];
+    NSString *pluginsDir = NppConfigSubpath(@"plugins");
     NSFileManager *fm = [NSFileManager defaultManager];
 
     // Build a folder-name → full-dylib-path map from _installed (which
@@ -798,7 +797,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
             _actionButton.title = [loc translate:@"Update"];
             _actionButton.hidden = NO;
             // Re-scan on every Updates-tab open — cheap, and keeps us
-            // honest against manual edits to ~/.nextpad++/plugins/.
+            // honest against manual edits to ~/Library/Application Support/Nextpad++/plugins/.
             [self refreshInstalledDylibFingerprints];
             [_filteredList addObjectsFromArray:[self updateCandidates]];
             break;
@@ -1054,7 +1053,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
         @"%@\n\n%@\n\n%@\n\n%@",
         [loc translate:@"Update the following plugins?"],
         [names componentsJoinedByString:@"\n"],
-        [loc translate:@"Current versions are backed up to ~/.nextpad++/plugin-backups/ before being replaced."],
+        [loc translate:@"Current versions are backed up to ~/Library/Application Support/Nextpad++/plugin-backups/ before being replaced."],
         [loc translate:@"Restart the application for changes to take effect."]];
     [confirm addButtonWithTitle:[loc translate:@"Update"]];
     [confirm addButtonWithTitle:[loc translate:@"Cancel"]];
@@ -1082,15 +1081,14 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
     }];
 }
 
-// Zip the plugin folder to ~/.nextpad++/plugin-backups/<folder>_<ts>.zip
+// Zip the plugin folder to ~/Library/Application Support/Nextpad++/plugin-backups/<folder>_<ts>.zip
 // via ditto -c -k --keepParent, then remove the folder. Returns YES iff
 // both steps succeeded so the caller knows it's safe to let the
 // extraction step overwrite.
 - (BOOL)backupAndDeletePluginFolder:(NppPluginEntry *)pe {
-    NSString *home       = NSHomeDirectory();
-    NSString *pluginDir  = [[home stringByAppendingPathComponent:@".nextpad++/plugins"]
+    NSString *pluginDir  = [NppConfigSubpath(@"plugins")
         stringByAppendingPathComponent:pe.folderName];
-    NSString *backupDir  = [home stringByAppendingPathComponent:@".nextpad++/plugin-backups"];
+    NSString *backupDir  = NppConfigSubpath(@"plugin-backups");
     NSFileManager *fm    = [NSFileManager defaultManager];
 
     // If there's nothing on disk, there's nothing to back up or remove —
@@ -1102,7 +1100,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
                         attributes:nil error:&err]) {
         NSLog(@"[PluginsAdmin] Backup dir create failed: %@", err);
         [self showInstallError:pe.displayName
-                       detail:@"Could not create ~/.nextpad++/plugin-backups/. Update skipped — existing plugin folder is untouched."];
+                       detail:@"Could not create the plugin-backups folder. Update skipped — existing plugin folder is untouched."];
         return NO;
     }
 
@@ -1213,9 +1211,8 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
                     }
                 }
 
-                // Extract ZIP to ~/.nextpad++/plugins/
-                NSString *pluginsDir = [NSHomeDirectory()
-                    stringByAppendingPathComponent:@".nextpad++/plugins"];
+                // Extract ZIP to ~/Library/Application Support/Nextpad++/plugins/
+                NSString *pluginsDir = NppConfigSubpath(@"plugins");
                 NSFileManager *fm = [NSFileManager defaultManager];
                 [fm createDirectoryAtPath:pluginsDir withIntermediateDirectories:YES
                                attributes:nil error:nil];
@@ -1299,8 +1296,7 @@ static NSInteger compareSemver(NSString *a, NSString *b) {
     [confirm beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse resp) {
         if (resp != NSAlertFirstButtonReturn) return;
 
-        NSString *pluginsDir = [NSHomeDirectory()
-            stringByAppendingPathComponent:@".nextpad++/plugins"];
+        NSString *pluginsDir = NppConfigSubpath(@"plugins");
         NSFileManager *fm = [NSFileManager defaultManager];
 
         for (NSString *name in self->_checkedPlugins) {

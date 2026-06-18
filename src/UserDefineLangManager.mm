@@ -1,4 +1,5 @@
 #import "UserDefineLangManager.h"
+#import "NppPaths.h"
 #import "NppThemeManager.h"
 #import "ScintillaView.h"
 #import "Scintilla.h"
@@ -50,8 +51,7 @@ extern "C" Scintilla::ILexer5 *CreateLexer(const char *name);
 #pragma mark - Directory paths
 
 + (NSString *)userUDLDirectory {
-    NSString *home = NSHomeDirectory();
-    NSString *dir = [home stringByAppendingPathComponent:@".nextpad++/userDefineLangs"];
+    NSString *dir = NppConfigSubpath(@"userDefineLangs");
     [[NSFileManager defaultManager] createDirectoryAtPath:dir
                               withIntermediateDirectories:YES attributes:nil error:nil];
     return dir;
@@ -73,7 +73,7 @@ extern "C" Scintilla::ILexer5 *CreateLexer(const char *name);
     [self _loadFromDirectory:[UserDefineLangManager userUDLDirectory]];
 
     // Also check for the legacy single-file container (userDefineLang.xml)
-    NSString *legacyPath = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/userDefineLang.xml"];
+    NSString *legacyPath = NppConfigSubpath(@"userDefineLang.xml");
     if ([[NSFileManager defaultManager] fileExistsAtPath:legacyPath]) {
         [self _loadFromContainerFile:legacyPath];
     }

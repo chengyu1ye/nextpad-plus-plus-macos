@@ -1,4 +1,5 @@
 #import "NppTabBar.h"
+#import "NppPaths.h"
 #import "NppThemeManager.h"
 #import "PreferencesWindowController.h"
 #import "NppLocalizer.h"   // match tab-menu items by normalized English title (locale-proof)
@@ -1574,7 +1575,7 @@ static NSMenu *_buildTabContextMenuFromXML(NSString *xmlPath) {
 
 - (NSMenu *)buildTabContextMenu {
     // Try user-customized tabContextMenu.xml first
-    NSString *configDir = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++"];
+    NSString *configDir = NppConfigDir();
     NSString *customPath = [configDir stringByAppendingPathComponent:@"tabContextMenu.xml"];
     NSMenu *menu = _buildTabContextMenuFromXML(customPath);
     if (menu) return menu;

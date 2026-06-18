@@ -1,4 +1,5 @@
 #import "PreferencesWindowController.h"
+#import "NppPaths.h"
 #import "NppLocalizer.h"
 #import "NppLangsManager.h"
 #import "NppThemeManager.h"
@@ -1801,7 +1802,7 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
     y -= 20;
 
     NSTextField *backupPath = [NSTextField labelWithString:
-        [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/backup/"]];
+        NppConfigSubpath(@"backup")];
     backupPath.frame = NSMakeRect(20, y, 400, 20);
     backupPath.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
     [v addSubview:backupPath];

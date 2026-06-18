@@ -20,7 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)shared;
 
-/// Load from ~/.nextpad++/langs.xml (or bundle fallback).
+/// Load from ~/Library/Application Support/Nextpad++/langs.xml (or bundle fallback).
 - (void)loadLangs;
 
 /// Look up language definition by name (e.g. "cpp", "python").

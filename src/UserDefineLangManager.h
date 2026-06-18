@@ -45,7 +45,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// Delete a UDL (removes from user directory).
 - (BOOL)deleteLanguage:(UserDefinedLang *)lang;
 
-/// Path to the user UDL directory (~/.nextpad++/userDefineLangs/).
+/// Path to the user UDL directory (~/Library/Application Support/Nextpad++/userDefineLangs/).
 + (NSString *)userUDLDirectory;
 
 /// Path to the bundled UDL directory (inside app bundle).

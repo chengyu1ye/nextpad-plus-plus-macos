@@ -1,7 +1,7 @@
 /*
  * test_plugins.mm — Plugin load-test harness for Nextpad++ macOS
  *
- * Scans ~/.nextpad++/plugins/ and verifies each plugin:
+ * Scans ~/Library/Application Support/Nextpad++/plugins/ and verifies each plugin:
  *   1. dylib loads (dlopen)
  *   2. All 5 required exports resolve (dlsym)
  *   3. getName() returns a valid string
@@ -187,7 +187,7 @@ int main(int argc, const char *argv[]) {
             pluginsDir = [NSString stringWithUTF8String:argv[1]];
         } else {
             pluginsDir = [NSHomeDirectory() stringByAppendingPathComponent:
-                          @".nextpad++/plugins"];
+                          @"Library/Application Support/Nextpad++/plugins"];
         }
 
         printf("\n  Plugin Load-Test Harness\n");

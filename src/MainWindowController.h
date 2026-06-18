@@ -27,7 +27,7 @@ NS_ASSUME_NONNULL_BEGIN
 /// Load a session file (plist format with tabs array).
 - (void)loadSessionFromPath:(NSString *)path;
 
-/// Restore the last session from ~/.nextpad++/session.plist.
+/// Restore the last session from ~/Library/Application Support/Nextpad++/session.plist.
 - (BOOL)restoreLastSession;
 
 /// Add a plugin-provided toolbar icon.  Called by NppPluginManager when a
@@ -81,10 +81,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
-/// Write current NSUserDefaults preferences to ~/.nextpad++/config.xml.
+/// Write current NSUserDefaults preferences to ~/Library/Application Support/Nextpad++/config.xml.
 void writeConfigXML(void);
 
-/// Read ~/.nextpad++/config.xml and apply settings to NSUserDefaults.
+/// Read ~/Library/Application Support/Nextpad++/config.xml and apply settings to NSUserDefaults.
 void readConfigXML(void);
 
 /// Regenerate toolbarButtonsConf_example.xml with current plugin entries.

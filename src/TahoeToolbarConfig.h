@@ -3,7 +3,7 @@
 //  Nextpad++ (macOS) — Liquid Glass / Tahoe profile
 //
 //  Persistence + model for the Tahoe toolbar's group layout, stored in
-//  ~/.nextpad++/toolbarButtonsTahoeConf.xml. This is a SEPARATE file from the
+//  ~/Library/Application Support/Nextpad++/toolbarButtonsTahoeConf.xml. This is a SEPARATE file from the
 //  Classic toolbarButtonsConf.xml on purpose (see RFC §5.2.6): the Classic file
 //  is rename-to-activate, whereas the Tahoe toolbar must be active whenever the
 //  user is in the Tahoe appearance — driven by NPPAppearanceStyle, not by whether
@@ -36,7 +36,7 @@ extern NSString *const NPPTahoeToolbarConfigChanged;
 
 @interface TahoeToolbarConfig : NSObject
 
-/// ~/.nextpad++/toolbarButtonsTahoeConf.xml
+/// ~/Library/Application Support/Nextpad++/toolbarButtonsTahoeConf.xml
 + (NSString *)filePath;
 
 /// Parse the file into the model. Returns nil if the file does not exist (the

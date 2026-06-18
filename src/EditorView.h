@@ -28,7 +28,7 @@ extern NSNotificationName const EditorViewDidSaveNotification;
 /// non-nil it overrides the "new N" name; ignored once the buffer has a filePath.
 @property (nonatomic, copy, nullable) NSString *customTabName;
 
-/// Path to the auto-backup copy in ~/.nextpad++/backup/ (nil if never backed up).
+/// Path to the auto-backup copy in ~/Library/Application Support/Nextpad++/backup/ (nil if never backed up).
 @property (nonatomic, copy, nullable) NSString *backupFilePath;
 
 /// Restore the untitled index from a saved session (keeps tab name consistent).
