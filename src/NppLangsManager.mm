@@ -1,4 +1,5 @@
 #import "NppLangsManager.h"
+#import "NppPaths.h"
 
 // ── NppLangDef ───────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@
     [_extMap removeAllObjects];
 
     // Try user langs.xml first, fall back to bundled langs.model.xml
-    NSString *userPath = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/langs.xml"];
+    NSString *userPath = NppConfigSubpath(@"langs.xml");
     NSData *data = [[NSFileManager defaultManager] fileExistsAtPath:userPath]
                    ? [NSData dataWithContentsOfFile:userPath] : nil;
     if (!data) {

@@ -48,6 +48,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// The view's intrinsic height grows to fit all rows.
 @property (nonatomic) BOOL wrapMode;
 
+/// Recompute tab frames after a preference change (max width, close button, etc.).
+- (void)relayout;
+
 /// Builds the tab right-click context menu (from tabContextMenu.xml, with a
 /// bundled fallback). Exposed so other surfaces — e.g. the Document List
 /// panel — can present the identical menu. The menu's commands act on the

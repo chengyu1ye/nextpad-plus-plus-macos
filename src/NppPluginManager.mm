@@ -1,4 +1,5 @@
 #import "NppPluginManager.h"
+#import "NppPaths.h"
 #import "MainWindowController.h"
 #import "MenuBuilder.h"        // kMenuTagPlugins
 #import "PreferencesWindowController.h"
@@ -190,7 +191,7 @@ static const uintptr_t kHandleScintillaSub   = 0x5343490B;  // "SCI\v"
 // ── Plugin directory ────────────────────────────────────────────────────
 
 static NSString *pluginBaseDir(void) {
-    return [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins"];
+    return NppConfigSubpath(@"plugins");
 }
 
 // All editors across primary + secondary (V + H split) tab managers, in
@@ -1083,7 +1084,7 @@ static intptr_t _npp_run_on_main(intptr_t (^block)(void)) {
         case NPPM_GETNPPSETTINGSDIRPATH: {
             char *buf = (char *)lParam;
             if (buf) {
-                NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++"];
+                NSString *path = NppConfigDir();
                 strlcpy(buf, path.UTF8String, 1024);
                 return (intptr_t)strlen(buf);
             }

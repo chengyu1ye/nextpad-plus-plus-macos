@@ -1,4 +1,5 @@
 #import "EditorView.h"
+#import "NppPaths.h"
 #import "NppApplication.h"
 #import "NppLangsManager.h"
 #import "UserDefineLangManager.h"
@@ -152,7 +153,7 @@ static NSDictionary<NSString *, NSString *> *extensionLanguageMap() {
             // Markup / Config
             // .md/.markdown intentionally NOT mapped here — markdown is no
             // longer a built-in language; the preinstalled Markdown UDL
-            // (~/.nextpad++/userDefineLangs/markdown._preinstalled.udl.xml)
+            // (~/Library/Application Support/Nextpad++/userDefineLangs/markdown._preinstalled.udl.xml)
             // claims these extensions and is resolved via the UDL fallback
             // in loadFileAtPath:. Mapping them to "markdown" here would
             // shadow that fallback and leave the file plain (issue #130
@@ -2166,7 +2167,7 @@ static const struct SciDefaultKeys *sciDefaultKeysFor(int sciID) {
     return NULL;
 }
 
-// Push the user's Scintilla-command shortcut overrides (from ~/.nextpad++/shortcuts.xml)
+// Push the user's Scintilla-command shortcut overrides (from ~/Library/Application Support/Nextpad++/shortcuts.xml)
 // into this editor's Scintilla keymap. Called once at construction and live on every
 // NPPShortcutsChangedNotification (via MainWindowController). Authoritative-per-command:
 // an overridden command's REAL default key(s) are cleared so the original stops firing,
@@ -2174,7 +2175,7 @@ static const struct SciDefaultKeys *sciDefaultKeysFor(int sciID) {
 // no overrides (and none ever applied) it returns immediately, leaving the stock keymap
 // untouched, so non-customising users see zero change.
 - (void)applyScintillaKeyOverrides {
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
+    NSString *path = NppConfigSubpath(@"shortcuts.xml");
     NSData *data = [NSData dataWithContentsOfFile:path];
 
     // Parse the overrides into a flat list first (sciID, keyCode, keyDef).

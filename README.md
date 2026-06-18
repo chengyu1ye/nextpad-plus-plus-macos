@@ -1,9 +1,9 @@
 # Nextpad++ for macOS
 
-**The native independent port of Notepad++ to macOS.** A full port of the original [Notepad++](https://notepad-plus-plus.org) codebase — not a rewrite, not an alternative, not Wine.
+**The full native port of Notepad++ to macOS.** A full port of the original [Notepad++](https://notepad-plus-plus.org) codebase — not a rewrite, not an alternative, not Wine.
 
 <p align="center">
-  <a href="https://nextpad.org"><img src="https://nextpad.org/assets/images/icon-128x128.png" alt="Nextpad++ for macOS app icon" width="128" height="128"></a>
+  <a href="https://nextpad.org"><img src="https://raw.githubusercontent.com/nextpad-plus-plus/nextpad.org/main/assets/images/github_screen1.png" alt="Notepad++ for macOS" width="1000"></a>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
 
 ## What this is
 
-Nextpad++ for macOS brings the beloved Windows code editor to Apple's desktop platform as a **fully native Mac application**. This is the actual Notepad++ codebase ported to run natively on macOS — built from source in Objective-C++, using platform-native APIs, with no compatibility layer in between.
+Nextpad++ for macOS brings the beloved Notepad++ Windows code editor to Apple's desktop platform as a **fully native Mac application**. This is the actual Notepad++ codebase fully ported to run natively on macOS — built from source in Objective-C++, using platform-native APIs, with no compatibility layer in between.
 
 - ✅ **Native macOS app** — no Wine, Porting Kit, CrossOver, or emulation
 - ✅ **Universal Binary** — runs natively on Apple Silicon (M1–M5) and Intel
@@ -33,18 +33,33 @@ Nextpad++ for macOS brings the beloved Windows code editor to Apple's desktop pl
 - ✅ **Free and open source** — GPL-3.0, no ads, no subscriptions, no telemetry
 - ✅ **Full feature parity** — syntax highlighting, plugins, macros, find-in-files, regex, split view, document map, and more
 
-The goal is not just to make Notepad++ "run" on Mac — it's to make it feel like it *belongs* there, with native menus, shortcuts, file dialogs, dark mode, and system integration.
+The goal is not just to make Notepad++ "run" on Mac — it's to make it feel like it *belongs* there, with native menus, shortcuts, file dialogs, dark mode, Tahoe look, full plugin ecosystem and system integration.
 
 ## Screenshots
 
 <p align="center">
-  <img src="https://nextpad.org/assets/images/screenshot1.png" alt="Nextpad++ for macOS in light mode with syntax-highlighted code, tabs, and document map" width="800">
-  <br><em>Light mode with syntax highlighting and document map</em>
+  <img src="https://nextpad.org/assets/images/screenshot7.png" alt="Nextpad++ for macOS in Dark mode Classic Look" width="850">
+  <br><em>Nextpad++ for macOS in Dark mode Classic Look</em>
 </p>
 
 <p align="center">
-  <img src="https://nextpad.org/assets/images/screenshot3.png" alt="Nextpad++ for macOS in dark mode with native macOS title bar" width="800">
-  <br><em>Dark mode, native macOS title bar</em>
+  <img src="https://nextpad.org/assets/images/screenshot1.png" alt="Nextpad++ for macOS in Light mode, Classic Look" width="850">
+  <br><em>Nextpad++ for macOS in Light mode, Classic Look</em>
+</p>
+
+<p align="center">
+  <img src="https://nextpad.org/assets/images/screenshot1.png" alt="Nextpad++ for macOS in Light mode, Classic Look" width="850">
+  <br><em>Nextpad++ for macOS in Light mode, Classic Look</em>
+</p>
+
+<p align="center">
+  <img src="https://nextpad.org/assets/images/plugins_admin_screen.png" alt="Nextpad++ for macOS in Light mode, Classic Look and Plugin Admin" width="850">
+  <br><em>Nextpad++ for macOS in Light mode and Classic Look</em>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/nextpad-plus-plus/nextpad.org/main/assets/images/github_screen1.png" alt="Notepad++ for macOS" width="1000">
+  <br><em>Nextpad++ for macOS in Dark mode and Tahoe Look</em>
 </p>
 
 ## Installation

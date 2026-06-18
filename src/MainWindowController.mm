@@ -1,4 +1,5 @@
 #import "MainWindowController.h"
+#import "NppPaths.h"                 // NppConfigDir()/NppConfigSubpath()
 #import <QuartzCore/QuartzCore.h>   // CAGradientLayer (Tahoe window backdrop)
 #import "TahoeToolbarConfig.h"      // Tahoe toolbar group layout (Liquid Glass)
 #import "AppDelegate.h"
@@ -87,9 +88,11 @@
 
 static NSString *const kWindowFrameKey = @"MainWindowFrame";
 
-// ── ~/.nextpad++ paths (mirrors %APPDATA%\Nextpad++ on Windows) ───────────────
+// ── Config paths (mirrors %APPDATA%\Nextpad++ on Windows) ────────────────────
+// Base dir is ~/Library/Application Support/Nextpad++ (see NppPaths.h); legacy
+// ~/.nextpad++ installs are migrated on first use.
 static NSString *nppConfigDir(void) {
-    return [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++"];
+    return NppConfigDir();
 }
 static NSString *nppBackupDir(void) {
     return [nppConfigDir() stringByAppendingPathComponent:@"backup"];
@@ -300,7 +303,7 @@ static BOOL _ynBool(NSString *s) { return [s.lowercaseString isEqualToString:@"y
 /// Helper: BOOL from "show"/"hide" (default NO)
 static BOOL _shBool(NSString *s) { return [s.lowercaseString isEqualToString:@"show"]; }
 
-/// Write current preferences from NSUserDefaults to ~/.nextpad++/config.xml.
+/// Write current preferences from NSUserDefaults to ~/Library/Application Support/Nextpad++/config.xml.
 void writeConfigXML(void) {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
 
@@ -522,7 +525,7 @@ void writeConfigXML(void) {
     [xml writeToFile:_configXmlPath() atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 
-/// Read ~/.nextpad++/config.xml and apply settings to NSUserDefaults.
+/// Read ~/Library/Application Support/Nextpad++/config.xml and apply settings to NSUserDefaults.
 void readConfigXML(void) {
     NSString *path = _configXmlPath();
     NSData *data = [NSData dataWithContentsOfFile:path];
@@ -769,7 +772,7 @@ static void ensureNppDirs(void) {
         }
     }
 
-    // Copy tabContextMenu_example.xml to ~/.nextpad++/ as a template for user customization.
+    // Copy tabContextMenu_example.xml to ~/Library/Application Support/Nextpad++/ as a template for user customization.
     // User renames it to tabContextMenu.xml to activate custom tab context menu.
     NSString *tabCtxExamplePath = [nppConfigDir() stringByAppendingPathComponent:@"tabContextMenu_example.xml"];
     if (![fm fileExistsAtPath:tabCtxExamplePath]) {
@@ -780,7 +783,7 @@ static void ensureNppDirs(void) {
     }
 
     // Copy contextMenu.xml from bundle if user copy doesn't exist.
-    // User edits ~/.nextpad++/contextMenu.xml to customize the editor right-click menu.
+    // User edits ~/Library/Application Support/Nextpad++/contextMenu.xml to customize the editor right-click menu.
     NSString *ctxMenuPath = [nppConfigDir() stringByAppendingPathComponent:@"contextMenu.xml"];
     if (![fm fileExistsAtPath:ctxMenuPath]) {
         NSString *bundleCopy = [[NSBundle mainBundle] pathForResource:@"contextMenu" ofType:@"xml"];
@@ -791,33 +794,33 @@ static void ensureNppDirs(void) {
     }
 
     // Copy langs.model.xml from bundle as langs.xml if user copy doesn't exist.
-    // User edits ~/.nextpad++/langs.xml to customize extensions, keywords, comment delimiters.
+    // User edits ~/Library/Application Support/Nextpad++/langs.xml to customize extensions, keywords, comment delimiters.
     NSString *langsPath = [nppConfigDir() stringByAppendingPathComponent:@"langs.xml"];
     if (![fm fileExistsAtPath:langsPath]) {
         NSString *bundleCopy = [[NSBundle mainBundle] pathForResource:@"langs.model" ofType:@"xml"];
         if (bundleCopy) {
             [fm copyItemAtPath:bundleCopy toPath:langsPath error:nil];
-            NSLog(@"[Langs] Copied langs.model.xml as langs.xml to ~/.nextpad++/");
+            NSLog(@"[Langs] Copied langs.model.xml as langs.xml to %@", nppConfigDir());
         }
     }
 
     // Copy stylers.model.xml from bundle as stylers.xml if user copy doesn't exist.
-    // User edits ~/.nextpad++/stylers.xml to customize the Default theme styles.
+    // User edits ~/Library/Application Support/Nextpad++/stylers.xml to customize the Default theme styles.
     NSString *stylersPath = [nppConfigDir() stringByAppendingPathComponent:@"stylers.xml"];
     if (![fm fileExistsAtPath:stylersPath]) {
         NSString *bundleCopy = [[NSBundle mainBundle] pathForResource:@"stylers.model" ofType:@"xml"];
         if (bundleCopy) {
             [fm copyItemAtPath:bundleCopy toPath:stylersPath error:nil];
-            NSLog(@"[Stylers] Copied stylers.model.xml as stylers.xml to ~/.nextpad++/");
+            NSLog(@"[Stylers] Copied stylers.model.xml as stylers.xml to %@", nppConfigDir());
         }
     }
 
-    // Create ~/.nextpad++/themes/ for user-installed themes (empty on first run).
+    // Create ~/Library/Application Support/Nextpad++/themes/ for user-installed themes (empty on first run).
     NSString *userThemesDir = [nppConfigDir() stringByAppendingPathComponent:@"themes"];
     [fm createDirectoryAtPath:userThemesDir
   withIntermediateDirectories:YES attributes:nil error:nil];
 
-    // Create ~/.nextpad++/functionList/ for user-defined function list parsers.
+    // Create ~/Library/Application Support/Nextpad++/functionList/ for user-defined function list parsers.
     NSString *userFuncListDir = [nppConfigDir() stringByAppendingPathComponent:@"functionList"];
     [fm createDirectoryAtPath:userFuncListDir
   withIntermediateDirectories:YES attributes:nil error:nil];
@@ -831,7 +834,7 @@ static void ensureNppDirs(void) {
         if (bundleCopy) [fm copyItemAtPath:bundleCopy toPath:tbExPath error:nil];
     }
 
-    // Create ~/.nextpad++/toolbarIcons/ for user custom toolbar icon sets.
+    // Create ~/Library/Application Support/Nextpad++/toolbarIcons/ for user custom toolbar icon sets.
     NSString *toolbarIconsDir = [nppConfigDir() stringByAppendingPathComponent:@"toolbarIcons"];
     [fm createDirectoryAtPath:toolbarIconsDir
   withIntermediateDirectories:YES attributes:nil error:nil];
@@ -1235,7 +1238,7 @@ static NSImage *nppToolbarIcon(NSString *fileName) {
     return img;
 }
 
-/// Load a custom toolbar icon from ~/.nextpad++/toolbarIcons/{folderName}/{buttonId}.png
+/// Load a custom toolbar icon from ~/Library/Application Support/Nextpad++/toolbarIcons/{folderName}/{buttonId}.png
 /// Returns nil if not found.
 static NSImage *_customToolbarIcon(NSString *buttonId, NSDictionary *toolbarConfig) {
     // Parse icoFolderName from the config (already parsed, but we need to read it here)
@@ -1661,7 +1664,7 @@ static const CGFloat kTGRadius   = 12.0;  // pill corner radius (rounded, mockup
 
 /// Parse toolbarButtonsConf.xml and return the ordered list of visible buttons.
 /// The XML document order determines toolbar button order (left to right).
-/// Lookup order: ~/.nextpad++/toolbarButtonsConf.xml → bundled default.
+/// Lookup order: ~/Library/Application Support/Nextpad++/toolbarButtonsConf.xml → bundled default.
 static NSDictionary *_parseToolbarConfig(void) {
     NSString *userPath = [nppConfigDir() stringByAppendingPathComponent:@"toolbarButtonsConf.xml"];
     BOOL hasUserConfig = [[NSFileManager defaultManager] fileExistsAtPath:userPath];
@@ -4220,14 +4223,14 @@ static BOOL groupHasTrailingSep(NSString *ident) {
 
 #pragma mark - Session
 
-/// Save session to ~/.nextpad++/session.plist.
-/// Untitled modified tabs are written to ~/.nextpad++/backup/ automatically.
+/// Save session to ~/Library/Application Support/Nextpad++/session.plist.
+/// Untitled modified tabs are written to ~/Library/Application Support/Nextpad++/backup/ automatically.
 - (void)saveSession {
     ensureNppDirs();
     NSString *backupDir = nppBackupDir();
 
     // Persist ALL open tabs so they reopen on next launch.
-    // Modified text files: back up content to ~/.nextpad++/backup/ so unsaved
+    // Modified text files: back up content to ~/Library/Application Support/Nextpad++/backup/ so unsaved
     // changes survive quit.  On next launch they reload from backup and show
     // as modified (Windows NPP behaviour — no save prompt on exit).
     // Binary / large-file tabs: record path only, no backup.
@@ -4362,7 +4365,7 @@ static BOOL groupHasTrailingSep(NSString *ident) {
     }
 }
 
-/// Restore session from ~/.nextpad++/session.plist.
+/// Restore session from ~/Library/Application Support/Nextpad++/session.plist.
 /// Returns YES if at least one tab was restored.
 - (BOOL)restoreLastSession {
     NSDictionary *session = [NSDictionary dictionaryWithContentsOfFile:nppSessionPath()];
@@ -4667,7 +4670,7 @@ static void removeMacroFromShortcutsXML(NSString *name) {
 
 #pragma mark - Auto-save
 
-/// Periodically write all modified editors to ~/.nextpad++/backup/ — never to the original file.
+/// Periodically write all modified editors to ~/Library/Application Support/Nextpad++/backup/ — never to the original file.
 /// Backs up both named and untitled files so unsaved changes survive a crash.
 - (void)autoSaveTick:(NSTimer *)t {
     ensureNppDirs();
@@ -5188,7 +5191,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
         a.messageText = [[NppLocalizer shared] translate:@"No Macro Recorded"];
         a.informativeText = [[NppLocalizer shared] translate:@"Record a macro first using Start Recording."];
         a.icon = [[NSImage alloc] initWithContentsOfFile:
-            [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins/Config/logo100px.png"]];
+            NppConfigSubpath(@"plugins/Config/logo100px.png")];
         [a runModal];
         return;
     }
@@ -7076,7 +7079,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     if ([panel runModal] != NSModalResponseOK) return;
 
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *pluginsDir = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins"];
+    NSString *pluginsDir = NppConfigSubpath(@"plugins");
     [fm createDirectoryAtPath:pluginsDir withIntermediateDirectories:YES attributes:nil error:nil];
 
     NSInteger imported = 0;
@@ -7781,7 +7784,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     // when the active UI language is non-English the title is translated
     // (e.g. "Синтаксисы" / "Мова" / "Langage"), and an
     // isEqualToString:@"Language" check would silently miss and skip the
-    // entire UDL insertion — losing every ~/.nextpad++/userDefineLangs/
+    // entire UDL insertion — losing every ~/Library/Application Support/Nextpad++/userDefineLangs/
     // entry from the menu.
     NSMenuItem *langTop = [[NSApp mainMenu] itemWithTag:kMenuTagLanguage];
     NSMenu *langMenu = langTop.submenu;
@@ -9206,7 +9209,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     else if ([keyTitle isEqualToString:@"Delete"]) keyCode = 46;
 
     // Insert into shortcuts.xml using raw text manipulation (preserves file structure)
-    NSString *shortcutsPath = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
+    NSString *shortcutsPath = NppConfigSubpath(@"shortcuts.xml");
     NSMutableString *xml = [[NSString stringWithContentsOfFile:shortcutsPath
                                                      encoding:NSUTF8StringEncoding error:nil] mutableCopy];
     if (!xml) return;
@@ -9682,7 +9685,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     [a addButtonWithTitle:[loc translate:@"OK"]];
     [a runModal];
 
-    // Open ~/.nextpad++/contextMenu.xml for editing in Nextpad++ itself
+    // Open ~/Library/Application Support/Nextpad++/contextMenu.xml for editing in Nextpad++ itself
     NSString *ctxPath = [nppConfigDir() stringByAppendingPathComponent:@"contextMenu.xml"];
     if ([[NSFileManager defaultManager] fileExistsAtPath:ctxPath]) {
         [self openFileAtPath:ctxPath];
@@ -10139,6 +10142,9 @@ static BOOL _writeCLIScript(NSString *script, NSString *path, NSError **outErr) 
     _subTabManagerH.tabBar.wrapMode = wrapTabs;
     _subTabManagerV.tabBar.wrapMode = wrapTabs;
 
+    for (NppTabBar *bar in @[_tabManager.tabBar, _subTabManagerH.tabBar, _subTabManagerV.tabBar])
+        [bar relayout];
+
     // Issue #183: apply the "Hide tab bar" pref live.
     [self _applyTabBarVisibility:[ud boolForKey:kPrefHideTabBar]];
 
@@ -10389,7 +10395,7 @@ static int64_t _sysctlInt(const char *name) {
     [info appendFormat:@"Bundle ID: %@\n", [[NSBundle mainBundle] bundleIdentifier] ?: @"n/a"];
     [info appendFormat:@"Path: %@\n", [[NSBundle mainBundle] executablePath]];
     [info appendFormat:@"Bundle Path: %@\n", [[NSBundle mainBundle] bundlePath]];
-    [info appendFormat:@"Config Dir: %@/.nextpad++\n", NSHomeDirectory()];
+    [info appendFormat:@"Config Dir: %@\n", nppConfigDir()];
 
     // ── Runtime ──────────────────────────────────────────────────────────
     int translated = 0; size_t tsz = sizeof(translated);
@@ -10418,7 +10424,7 @@ static int64_t _sysctlInt(const char *name) {
     [info appendFormat:@"Auto-Complete Min Chars: %ld\n", (long)[ud integerForKey:@"kPrefAutoCompleteMinChars"]];
 
     // Session info
-    NSString *sessionPath = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/session.plist"];
+    NSString *sessionPath = NppConfigSubpath(@"session.plist");
     BOOL hasSession = [[NSFileManager defaultManager] fileExistsAtPath:sessionPath];
     [info appendFormat:@"Session file: %@\n", hasSession ? @"exists" : @"none"];
     if (hasSession) {
@@ -10522,7 +10528,7 @@ static int64_t _sysctlInt(const char *name) {
 
     // ── Plugins ──────────────────────────────────────────────────────────
     [info appendString:@"\n── Plugins ──\n"];
-    NSString *pluginDir = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins"];
+    NSString *pluginDir = NppConfigSubpath(@"plugins");
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray<NSString *> *pluginDirs = [fm contentsOfDirectoryAtPath:pluginDir error:nil];
     NSInteger pluginCount = 0;
@@ -10551,7 +10557,7 @@ static int64_t _sysctlInt(const char *name) {
 
     // ── Config Files ─────────────────────────────────────────────────────
     [info appendString:@"\n── Config Files ──\n"];
-    NSString *nppDir = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++"];
+    NSString *nppDir = nppConfigDir();
     NSArray *configFiles = @[@"session.plist", @"macros.plist", @"plugins/Config/URLPlugin.json"];
     for (NSString *relPath in configFiles) {
         NSString *fullPath = [nppDir stringByAppendingPathComponent:relPath];
@@ -10584,7 +10590,7 @@ static int64_t _sysctlInt(const char *name) {
     NSAlert *a = [[NSAlert alloc] init];
     a.messageText = [[NppLocalizer shared] translate:@"Debug Info"];
     a.icon = [[NSImage alloc] initWithContentsOfFile:
-        [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins/Config/logo100px.png"]];
+        NppConfigSubpath(@"plugins/Config/logo100px.png")];
     [a addButtonWithTitle:[[NppLocalizer shared] translate:@"Copy"]];
     [a addButtonWithTitle:[[NppLocalizer shared] translate:@"OK"]];
 
@@ -10627,7 +10633,7 @@ static int64_t _sysctlInt(const char *name) {
 
 - (BOOL)windowShouldClose:(NSWindow *)sender {
     // Windows NPP behaviour: no save prompts on quit.
-    // Back up all modified editors to ~/.nextpad++/backup/ and save session.
+    // Back up all modified editors to ~/Library/Application Support/Nextpad++/backup/ and save session.
     // On next launch, modified files reload from backup and show as unsaved.
     //
     // Issue #87 — gate the session save on the new "Remember current session

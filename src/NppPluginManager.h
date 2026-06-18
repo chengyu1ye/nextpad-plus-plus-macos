@@ -11,7 +11,7 @@ extern NSNotificationName const NppPluginsDidLoadNotification;
 /// Manages the lifecycle of Nextpad++ dylib plugins on macOS.
 ///
 /// Responsibilities:
-///   - Discover and load .dylib plugins from ~/.nextpad++/plugins/
+///   - Discover and load .dylib plugins from ~/Library/Application Support/Nextpad++/plugins/
 ///   - Resolve the 5 mandatory C exports (setInfo, getName, etc.)
 ///   - Build NppData with opaque handles and a sendMessage function pointer
 ///   - Dispatch NPPM_* messages from plugins to the host

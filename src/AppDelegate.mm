@@ -1,4 +1,5 @@
 #import "AppDelegate.h"
+#import "NppPaths.h"
 #import "NppApplication.h"
 #import "MainWindowController.h"
 #import "MenuBuilder.h"
@@ -220,7 +221,7 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
         a.messageText = [[NppLocalizer shared] translate:@"Nextpad++ Loading Time"];
         a.informativeText = msg;
         a.icon = [[NSImage alloc] initWithContentsOfFile:
-            [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins/Config/logo100px.png"]];
+            NppConfigSubpath(@"plugins/Config/logo100px.png")];
         [a runModal];
     }
 
@@ -544,7 +545,7 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
 
 /// Load shortcut overrides from shortcuts.xml <InternalCommands> and apply to live menu items.
 - (void)_loadShortcutOverrides {
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/shortcuts.xml"];
+    NSString *path = NppConfigSubpath(@"shortcuts.xml");
     NSData *data = [NSData dataWithContentsOfFile:path];
     if (!data) {
         NSLog(@"[Shortcuts] No shortcuts.xml found at %@ — skipping overrides", path);
@@ -707,7 +708,7 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
     if ([panel runModal] != NSModalResponseOK) return;
 
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *themesDir = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/themes"];
+    NSString *themesDir = NppConfigSubpath(@"themes");
     [fm createDirectoryAtPath:themesDir withIntermediateDirectories:YES attributes:nil error:nil];
 
     NSInteger imported = 0;
@@ -760,7 +761,7 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
 
     // Use our logo
     NSImage *logo = [[NSImage alloc] initWithContentsOfFile:
-        [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/plugins/Config/logo100px.png"]];
+        NppConfigSubpath(@"plugins/Config/logo100px.png")];
     if (!logo) {
         // Fallback: try bundle resource
         NSString *logoPath = [[NSBundle mainBundle] pathForResource:@"logo100px" ofType:@"png"

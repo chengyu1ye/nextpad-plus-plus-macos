@@ -101,6 +101,7 @@ set(APP_SRCS
     src/NppApplication.mm
     src/NppThemeManager.mm
     src/NppCommandLineParams.mm
+    src/NppPaths.mm
     src/ShortcutMapperWindowController.mm
     src/NppLocalizer.mm
     src/NppLangsManager.mm
@@ -144,6 +145,7 @@ set(APP_SRCS
 )
 
 set(APP_HEADERS
+    src/NppPaths.h
     src/NppLocalizer.h
     src/NppLangsManager.h
     src/AppDelegate.h
@@ -259,28 +261,28 @@ add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
         "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/userDefineLangs/"
     COMMENT "Copying pre-installed UDL files into bundle")
 
-# Default shortcuts.xml (copied to ~/.nextpad++/ on first run if missing)
+# Default shortcuts.xml (copied to ~/Library/Application Support/Nextpad++/ on first run if missing)
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/resources/shortcuts.xml"
         "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/shortcuts.xml"
     COMMENT "Copying default shortcuts.xml into bundle")
 
-# Default tabContextMenu.xml (copied to ~/.nextpad++/ on first run)
+# Default tabContextMenu.xml (copied to ~/Library/Application Support/Nextpad++/ on first run)
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/resources/tabContextMenu.xml"
         "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/tabContextMenu.xml"
     COMMENT "Copying default tabContextMenu.xml into bundle")
 
-# Default contextMenu.xml (copied to ~/.nextpad++/ on first run)
+# Default contextMenu.xml (copied to ~/Library/Application Support/Nextpad++/ on first run)
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/resources/contextMenu.xml"
         "$<TARGET_BUNDLE_DIR:NotepadPlusPlusMac>/Contents/Resources/contextMenu.xml"
     COMMENT "Copying default contextMenu.xml into bundle")
 
-# Default toolbarButtonsConf.xml (copied as _example to ~/.nextpad++/ on first run)
+# Default toolbarButtonsConf.xml (copied as _example to ~/Library/Application Support/Nextpad++/ on first run)
 add_custom_command(TARGET NotepadPlusPlusMac POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/resources/toolbarButtonsConf.xml"

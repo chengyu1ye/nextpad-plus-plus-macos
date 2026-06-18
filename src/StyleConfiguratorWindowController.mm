@@ -1,4 +1,5 @@
 #import "StyleConfiguratorWindowController.h"
+#import "NppPaths.h"
 #import "PreferencesWindowController.h"
 #import "NppLocalizer.h"
 
@@ -151,8 +152,8 @@ static NSString *modelLexerID(NSString *themeID) {
 }
 
 - (NSMutableArray<NPPLexer *> *)_parseDefaultXML {
-    // Read from ~/.nextpad++/stylers.xml first (user-editable), fall back to bundle model.
-    NSString *userStylers = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/stylers.xml"];
+    // Read from ~/Library/Application Support/Nextpad++/stylers.xml first (user-editable), fall back to bundle model.
+    NSString *userStylers = NppConfigSubpath(@"stylers.xml");
     NSURL *url = nil;
     if ([[NSFileManager defaultManager] fileExistsAtPath:userStylers]) {
         url = [NSURL fileURLWithPath:userStylers];
@@ -190,7 +191,7 @@ static NSString *modelLexerID(NSString *themeID) {
         return result; // "Default (stylers.xml)" = pure model defaults
     }
 
-    // Find theme XML: check user ~/.nextpad++/themes/ first, then bundle
+    // Find theme XML: check user ~/Library/Application Support/Nextpad++/themes/ first, then bundle
     NSURL *themeURL = nil;
     NSString *userPath = [_userThemesDir() stringByAppendingPathComponent:
                           [themeName stringByAppendingPathExtension:@"xml"]];
@@ -243,9 +244,9 @@ static NSString *modelLexerID(NSString *themeID) {
 
 // ── Available themes ──────────────────────────────────────────────────────────
 
-/// Return path to ~/.nextpad++/themes/ (user-installed themes directory).
+/// Return path to ~/Library/Application Support/Nextpad++/themes/ (user-installed themes directory).
 static NSString *_userThemesDir(void) {
-    return [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/themes"];
+    return NppConfigSubpath(@"themes");
 }
 
 - (NSArray<NSString *> *)availableThemeNames {
@@ -254,7 +255,7 @@ static NSString *_userThemesDir(void) {
 
     NSMutableSet<NSString *> *seen = [NSMutableSet new]; // deduplicate by name
 
-    // Scan user themes first (~/.nextpad++/themes/) — user themes override bundled
+    // Scan user themes first (~/Library/Application Support/Nextpad++/themes/) — user themes override bundled
     NSString *userDir = _userThemesDir();
     NSArray<NSString *> *userFiles = [[NSFileManager defaultManager]
         contentsOfDirectoryAtPath:userDir error:nil];
@@ -450,7 +451,7 @@ static NSString *_userThemesDir(void) {
     // Determine target XML file
     NSString *xmlPath;
     if ([themeName isEqualToString:kDefaultThemeName] || !themeName.length) {
-        xmlPath = [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++/stylers.xml"];
+        xmlPath = NppConfigSubpath(@"stylers.xml");
     } else {
         // User themes dir first; if not there, copy from bundle
         NSString *userPath = [_userThemesDir() stringByAppendingPathComponent:

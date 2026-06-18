@@ -6,13 +6,14 @@
 //
 
 #import "TahoeToolbarConfig.h"
+#import "NppPaths.h"
 
 NSString *const NPPTahoeToolbarConfigChanged = @"NPPTahoeToolbarConfigChanged";
 
 // Mirrors nppConfigDir() in MainWindowController.mm (kept local to avoid a header
-// dependency): ~/.nextpad++.
+// dependency): ~/Library/Application Support/Nextpad++.
 static NSString *_tahoeConfigDir(void) {
-    return [NSHomeDirectory() stringByAppendingPathComponent:@".nextpad++"];
+    return NppConfigDir();
 }
 
 static NSString *const kSchemaHeader =
