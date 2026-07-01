@@ -92,6 +92,10 @@ extern NSNotificationName const EditorViewDidSaveNotification;
 /// Save to a specific path.
 - (BOOL)saveToPath:(NSString *)path error:(NSError **)error;
 
+/// Write a snapshot of the current content to a path WITHOUT changing which
+/// file this editor is bound to ("Save a Copy As"). Returns YES on success.
+- (BOOL)writeCopyToPath:(NSString *)path error:(NSError **)error;
+
 /// Set the syntax language by name (e.g. "cpp", "python"). Pass "" for plain text.
 - (void)setLanguage:(NSString *)languageName;
 

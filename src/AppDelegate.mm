@@ -299,12 +299,24 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
 
     [mwc showWindow:nil];
 
-    // Observe close to remove from our array
-    [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification
-                                                      object:mwc.window
-                                                       queue:nil
-                                                  usingBlock:^(NSNotification *note) {
+    // Observe close to remove from our array. Keep the returned token and
+    // remove the observer when it fires — otherwise the notification center
+    // retains the block (which strongly captures mwc) for the app's lifetime,
+    // leaking every opened-and-closed secondary window's controller and its
+    // whole object graph.
+    __block id closeToken =
+        [[NSNotificationCenter defaultCenter] addObserverForName:NSWindowWillCloseNotification
+                                                          object:mwc.window
+                                                           queue:nil
+                                                      usingBlock:^(NSNotification *note) {
         [self.windowControllers removeObject:mwc];
+        [[NSNotificationCenter defaultCenter] removeObserver:closeToken];
+        // Also drop the __block storage's strong ref to the token, otherwise
+        // token -> block -> __block storage -> token stays a retained island
+        // (which captures mwc) even after the center deregisters it. The center
+        // retains the block across this in-flight post, so it is safe to release
+        // our last ref here. (Bug B leak fix.)
+        closeToken = nil;
     }];
 
     return mwc;

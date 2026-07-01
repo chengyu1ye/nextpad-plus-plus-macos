@@ -39,6 +39,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// Close a specific editor tab.
 - (void)closeEditor:(EditorView *)editor;
 
+/// Close a specific editor tab WITHOUT any save prompt. The caller is
+/// responsible for having already handled unsaved changes. Keeps at least one
+/// tab open (opens a fresh untitled tab if this was the last one).
+- (void)removeEditor:(EditorView *)editor;
+
 /// Remove an editor from this manager without any save prompt or deallocation.
 /// The EditorView stays alive; caller is responsible for adopting it elsewhere.
 - (void)evictEditor:(EditorView *)editor;

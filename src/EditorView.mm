@@ -697,7 +697,11 @@ static NSUInteger nppLargeFileThreshold(void) {
     return [self saveToPath:_filePath error:error];
 }
 
-- (BOOL)saveToPath:(NSString *)path error:(NSError **)error {
+/// Encode the current document (honouring its encoding/BOM) and write the bytes
+/// to `path`. Pure I/O: does NOT change the editor's identity (file path,
+/// modified state, save point, backup, clone links, language). Returns NO and
+/// sets *error on failure.
+- (BOOL)_writeContentsToPath:(NSString *)path error:(NSError **)error {
     BOOL ok = NO;
 
     if (_fileEncoding == NSUTF8StringEncoding) {
@@ -767,6 +771,19 @@ static NSUInteger nppLargeFileThreshold(void) {
                                                code:NSFileWriteUnknownError userInfo:nil];
         return NO;
     }
+    return YES;
+}
+
+/// Write a snapshot of the current contents to `path` WITHOUT repointing the
+/// editor at it. Used by "Save a Copy As": the live document keeps its original
+/// file, modified state, save point and backup, so subsequent saves still go to
+/// the original. Returns NO and sets *error on failure.
+- (BOOL)writeCopyToPath:(NSString *)path error:(NSError **)error {
+    return [self _writeContentsToPath:path error:error];
+}
+
+- (BOOL)saveToPath:(NSString *)path error:(NSError **)error {
+    if (![self _writeContentsToPath:path error:error]) return NO;
 
     NSString *oldPath = _filePath;
     _filePath = [path copy];
@@ -4715,9 +4732,13 @@ static NSSet<NSString *> *_cLikeLanguages() {
 
 /// Get selected text as NSString. Returns nil if no selection.
 - (nullable NSString *)selectedText {
+    // SCI_GETSELTEXT returns the selection length in bytes WITHOUT the NUL,
+    // but writes a terminating NUL one byte past that length — so the buffer
+    // must be len + 1 bytes (len == 1 is a real single-character selection).
     sptr_t len = [_scintillaView message:SCI_GETSELTEXT wParam:0 lParam:0];
-    if (len <= 1) return nil; // no selection (len includes NUL)
-    char *buf = (char *)malloc((size_t)len);
+    if (len <= 0) return nil; // no selection
+    char *buf = (char *)malloc((size_t)len + 1);
+    if (!buf) return nil;
     [_scintillaView message:SCI_GETSELTEXT wParam:0 lParam:(sptr_t)buf];
     NSString *s = [NSString stringWithUTF8String:buf] ?: @"";
     free(buf);
@@ -4853,8 +4874,11 @@ static NSSet<NSString *> *_cLikeLanguages() {
     [_scintillaView message:SCI_BEGINUNDOACTION];
     [_scintillaView message:SCI_SETTARGETSTART wParam:(uptr_t)start];
     [_scintillaView message:SCI_SETTARGETEND   wParam:(uptr_t)end];
-    [_scintillaView message:SCI_REPLACETARGET  wParam:(uptr_t)joined.length
-                                               lParam:(sptr_t)joined.UTF8String];
+    // SCI_REPLACETARGET wParam is a BYTE count — use the UTF-8 byte length, not
+    // joined.length (UTF-16 units), or non-ASCII content gets truncated.
+    const char *joinedUTF8 = joined.UTF8String;
+    [_scintillaView message:SCI_REPLACETARGET  wParam:(uptr_t)strlen(joinedUTF8)
+                                               lParam:(sptr_t)joinedUTF8];
     [_scintillaView message:SCI_ENDUNDOACTION];
 }
 

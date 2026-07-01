@@ -15,11 +15,21 @@
     task.standardError  = errPipe;
     @try {
         [task launch];
-        [task waitUntilExit];
     } @catch (NSException *) {
         return @"";
     }
-    NSData *data = outPipe.fileHandleForReading.readDataToEndOfFile;
+    // Drain stdout and stderr concurrently while git runs. Each pipe buffer is
+    // only ~64KB; if either fills, git blocks on write and never exits — and
+    // reading just one stream before waitUntilExit still deadlocks on the other.
+    NSFileHandle *errFH = errPipe.fileHandleForReading;
+    dispatch_semaphore_t errDone = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        [errFH readDataToEndOfFile];
+        dispatch_semaphore_signal(errDone);
+    });
+    NSData *data = [outPipe.fileHandleForReading readDataToEndOfFile];
+    [task waitUntilExit];
+    dispatch_semaphore_wait(errDone, DISPATCH_TIME_FOREVER);
     return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
 }
 
@@ -122,9 +132,24 @@
         NSPipe *errPipe = [NSPipe pipe];
         task.standardOutput = outPipe;
         task.standardError  = errPipe;
-        @try { [task launch]; [task waitUntilExit]; } @catch (NSException *) {}
+        @try {
+            [task launch];
+        } @catch (NSException *) {
+            dispatch_async(dispatch_get_main_queue(), ^{ if (cb) cb(NO, nil); });
+            return;
+        }
+        // Drain stdout concurrently so a large commit summary can't fill the
+        // pipe buffer and deadlock git before it exits; read stderr here.
+        NSFileHandle *outFH = outPipe.fileHandleForReading;
+        dispatch_semaphore_t outDone = dispatch_semaphore_create(0);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            [outFH readDataToEndOfFile];
+            dispatch_semaphore_signal(outDone);
+        });
+        NSData *errData = [errPipe.fileHandleForReading readDataToEndOfFile];
+        [task waitUntilExit];
+        dispatch_semaphore_wait(outDone, DISPATCH_TIME_FOREVER);
         int status = task.terminationStatus;
-        NSData *errData = errPipe.fileHandleForReading.readDataToEndOfFile;
         NSString *errMsg = [[NSString alloc] initWithData:errData encoding:NSUTF8StringEncoding];
         dispatch_async(dispatch_get_main_queue(), ^{
             if (cb) cb(status == 0, status == 0 ? nil : errMsg);

@@ -136,7 +136,14 @@
                 return;
             }
             NSError *err;
-            [editor saveError:&err];
+            if (![editor saveError:&err]) {
+                // Save failed (read-only path, full disk, encoding-inapplicable, …).
+                // Surface the error and KEEP the tab — falling through to
+                // removeEditor: would silently destroy the user's unsaved changes
+                // even though they explicitly chose "Save".
+                [[NSAlert alertWithError:err] runModal];
+                return;
+            }
         } else if (resp == NSAlertThirdButtonReturn) {
             return;
         }
@@ -336,9 +343,13 @@
     [panel beginWithCompletionHandler:^(NSModalResponse result) {
         if (result == NSModalResponseOK) {
             NSError *err;
-            [editor saveToPath:panel.URL.path error:&err];
+            // Report the ACTUAL write result, not just that the panel was
+            // confirmed. completion(YES) tells the close path it may discard the
+            // buffer, so reporting success on a failed write loses the content.
+            BOOL saved = [editor saveToPath:panel.URL.path error:&err];
+            if (!saved) [[NSAlert alertWithError:err] runModal];
             [self refreshAllTabTitles];
-            if (completion) completion(YES);
+            if (completion) completion(saved);
         } else {
             if (completion) completion(NO);
         }

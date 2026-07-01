@@ -1309,6 +1309,15 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
 
     [v addSubview:optBox];
 
+    // [Default] is selected initially — hide "Use default value" checkbox and
+    // enable controls. The table selection delegate may not fire during page
+    // construction because the view isn't yet in a window.
+    defaultChk.hidden = YES;
+    sizeField.enabled = YES;
+    tabRadio.enabled = YES;
+    spaceRadio.enabled = YES;
+    bsChk.enabled = YES;
+
     // ── Auto-indent radio group (right of Indent Settings) ──
     NSBox *autoBox = [[NSBox alloc] initWithFrame:NSMakeRect(215, y - 90, 160, 100)];
     autoBox.title = [loc translate:@"Auto-indent"];
@@ -2487,6 +2496,7 @@ static NSDictionary<NSString *, NSString *> *_langDisplayNames() {
 
 - (void)closePrefs:(id)sender {
     [self _saveClickableSchemes];
+    [self.window makeFirstResponder:nil]; // commit any in-progress text field edits
     [self.window orderOut:nil];
 }
 

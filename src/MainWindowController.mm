@@ -1937,6 +1937,7 @@ static void _nppTahoeRoundEditorCard(NSView *container, NSView *content) {
      NSMenuDelegate>
 - (void)_saveOpenSidePanels;
 - (void)_populatePluginOverflowMenu:(NSMenu *)menu;  // plugins overflow (≫) submenu
+- (void)_closeEditors:(NSArray<EditorView *> *)editors inManager:(TabManager *)mgr;
 @end
 
 // Lazy delegate for the plugins overflow (≫) submenu: on open it asks the window
@@ -2185,6 +2186,12 @@ static void _nppTahoeRoundEditorCard(NSView *container, NSView *content) {
         [NSEvent removeMonitor:_scrollZoomEventMonitor];
         _scrollZoomEventMonitor = nil;
     }
+    // Defensive: windowWillClose: already tears these down, but invalidate here
+    // too in case the controller is released without a window-close notification.
+    [_scrollSyncTimer invalidate];
+    _scrollSyncTimer = nil;
+    [_autoSaveTimer invalidate];
+    _autoSaveTimer = nil;
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
 
@@ -4817,13 +4824,20 @@ static void removeMacroFromShortcutsXML(NSString *name) {
     // Save all modified files silently. Named files save to disk;
     // untitled files prompt Save As for each one.
     NSArray<TabManager *> *managers = @[_tabManager, _subTabManagerH, _subTabManagerV];
+    NSMutableArray<NSString *> *failures = [NSMutableArray array];
     for (TabManager *mgr in managers) {
         for (EditorView *ed in mgr.allEditors.copy) {
             if (!ed.isModified) continue;
             if (ed.filePath) {
                 NSError *err;
-                [ed saveError:&err];
+                // Don't silently swallow a failed write: the tab stays dirty but
+                // the user is told "Save All" succeeded. Collect failures and
+                // surface them, matching saveDocument:'s alert-on-failure.
+                if (![ed saveError:&err])
+                    [failures addObject:[NSString stringWithFormat:@"%@ — %@",
+                        ed.displayName, err.localizedDescription ?: @"save failed"]];
             } else {
+                // runSavePanelForEditor: surfaces its own error on failure.
                 [mgr runSavePanelForEditor:ed completion:nil];
             }
         }
@@ -4832,6 +4846,12 @@ static void removeMacroFromShortcutsXML(NSString *name) {
     [self updateTitle];
     if (_docListPanel && [_sidePanelHost hasPanel:_docListPanel])
         [_docListPanel refreshModifiedStates];
+    if (failures.count) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = [[NppLocalizer shared] translate:@"Some documents could not be saved"];
+        alert.informativeText = [failures componentsJoinedByString:@"\n"];
+        [alert runModal];
+    }
 }
 
 - (void)closeCurrentTab:(id)sender {
@@ -4842,8 +4862,7 @@ static void removeMacroFromShortcutsXML(NSString *name) {
 }
 
 - (void)closeAllTabs:(id)sender {
-    for (EditorView *ed in _tabManager.allEditors.copy)
-        [_tabManager closeEditor:ed];
+    [self _closeEditors:_tabManager.allEditors.copy inManager:_tabManager];
 }
 
 - (void)printDocument:(id)sender {
@@ -8250,7 +8269,10 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
         NSError *err;
-        if (![ed saveToPath:panel.URL.path error:&err])
+        // "Save a Copy As" writes a snapshot but must NOT repoint the live
+        // document at the copy — otherwise future saves/edits would go to the
+        // copy and the original would be stranded.
+        if (![ed writeCopyToPath:panel.URL.path error:&err])
             [[NSAlert alertWithError:err] beginSheetModalForWindow:self.window completionHandler:nil];
     }];
 }
@@ -8376,44 +8398,88 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
 
 #pragma mark - File: Close Multiple Documents
 
-/// Prompt to save a modified editor synchronously. Returns YES if safe to close.
-- (BOOL)_promptSaveBeforeClose:(EditorView *)ed {
-    if (!ed.isModified) return YES;
+/// Outcome of prompting whether to save one modified editor while closing a
+/// batch of tabs (Close All, Close All But This, …).
+typedef NS_ENUM(NSInteger, NppBatchCloseDecision) {
+    NppBatchCloseSaveAttempted, ///< User chose Save; editor is clean iff the save succeeded.
+    NppBatchCloseDiscard,       ///< Discard this document's changes.
+    NppBatchCloseDiscardAll,    ///< Discard this and every remaining modified document.
+    NppBatchCloseCancel,        ///< Abort the whole batch close; leave remaining tabs open.
+};
+
+/// Prompt to save one modified editor. When `allowAll` is YES the alert offers
+/// an extra "Don't Save All" button so the user can discard every remaining
+/// unsaved document in the batch with a single click (issue #214).
+- (NppBatchCloseDecision)_promptBatchSaveBeforeClose:(EditorView *)ed allowAll:(BOOL)allowAll {
+    NppLocalizer *loc = [NppLocalizer shared];
     NSAlert *alert = [[NSAlert alloc] init];
-    alert.messageText = [NSString stringWithFormat:[[NppLocalizer shared] translate:@"Save '%@' before closing?"], ed.displayName];
-    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Save"]];
-    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Don't Save"]];
-    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+    alert.messageText = [NSString stringWithFormat:[loc translate:@"Save '%@' before closing?"], ed.displayName];
+    [alert addButtonWithTitle:[loc translate:@"Save"]];        // NSAlertFirstButtonReturn
+    [alert addButtonWithTitle:[loc translate:@"Don't Save"]];  // NSAlertSecondButtonReturn
+    if (allowAll)
+        [alert addButtonWithTitle:[loc translate:@"Don't Save All"]]; // NSAlertThirdButtonReturn
+    [alert addButtonWithTitle:[loc translate:@"Cancel"]];      // Third (or fourth) button
+
     NSModalResponse r = [alert runModal];
-    if (r == NSAlertThirdButtonReturn) return NO;  // Cancel
     if (r == NSAlertFirstButtonReturn) {            // Save
         if (ed.filePath) {
             NSError *err;
-            return [ed saveError:&err];
+            [ed saveError:&err];                    // on failure the editor stays modified
+        } else {
+            // Untitled — run modal save panel. Backing out leaves it modified.
+            NSSavePanel *sp = [NSSavePanel savePanel];
+            sp.nameFieldStringValue = ed.displayName;
+            if ([sp runModal] == NSModalResponseOK) {
+                NSError *err;
+                [ed saveToPath:sp.URL.path error:&err];
+            }
         }
-        // Untitled — run modal save panel
-        NSSavePanel *sp = [NSSavePanel savePanel];
-        sp.nameFieldStringValue = ed.displayName;
-        if ([sp runModal] == NSModalResponseOK) {
-            NSError *err;
-            return [ed saveToPath:sp.URL.path error:&err];
-        }
-        return NO;
+        return NppBatchCloseSaveAttempted;
     }
-    return YES; // Don't Save
+    if (r == NSAlertSecondButtonReturn) return NppBatchCloseDiscard;                   // Don't Save
+    if (allowAll && r == NSAlertThirdButtonReturn) return NppBatchCloseDiscardAll;     // Don't Save All
+    return NppBatchCloseCancel;                                                        // Cancel
+}
+
+/// Close every editor in `editors` (all belonging to `mgr`), prompting once per
+/// modified document. "Don't Save All" suppresses the prompt for the remaining
+/// modified documents; Cancel aborts the batch and leaves the unprocessed tabs
+/// open. A modified document whose save failed or was declined is kept open and
+/// the batch continues with the next tab.
+- (void)_closeEditors:(NSArray<EditorView *> *)editors inManager:(TabManager *)mgr {
+    NSUInteger dirtyCount = 0;
+    for (EditorView *ed in editors)
+        if (ed.isModified && !ed.cloneSibling) dirtyCount++;
+    BOOL allowAll = dirtyCount > 1;
+
+    BOOL discardAll = NO;
+    for (EditorView *ed in editors) {
+        if (ed.isModified && !ed.cloneSibling && !discardAll) {
+            switch ([self _promptBatchSaveBeforeClose:ed allowAll:allowAll]) {
+                case NppBatchCloseCancel:     return;            // abort the whole batch
+                case NppBatchCloseDiscardAll: discardAll = YES; break;
+                case NppBatchCloseSaveAttempted:
+                    if (ed.isModified) continue;                 // save failed/declined — keep this tab
+                    break;
+                case NppBatchCloseDiscard:    break;
+            }
+        }
+        [mgr removeEditor:ed];
+    }
+    [self updateTitle];
 }
 
 - (void)closeAllButCurrent:(id)sender {
     EditorView *current = [self currentEditor];
     NSArray *all = _activeTabManager.allEditors.copy;
+    NSMutableArray<EditorView *> *toClose = [NSMutableArray array];
     for (NSInteger i = 0; i < (NSInteger)all.count; i++) {
         EditorView *ed = all[i];
         if (ed == current) continue;
         if ([_activeTabManager.tabBar isTabPinnedAtIndex:i]) continue;
-        if ([self _promptSaveBeforeClose:ed])
-            [_activeTabManager closeEditor:ed];
+        [toClose addObject:ed];
     }
-    [self updateTitle];
+    [self _closeEditors:toClose inManager:_activeTabManager];
 }
 
 - (void)closeAllToLeft:(id)sender {
@@ -8421,13 +8487,12 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     NSArray *all = _activeTabManager.allEditors;
     NSInteger idx = [all indexOfObject:current];
     if (idx == NSNotFound) return;
-    for (NSInteger i = idx - 1; i >= 0; i--) {
+    NSMutableArray<EditorView *> *toClose = [NSMutableArray array];
+    for (NSInteger i = 0; i < idx; i++) {
         if ([_activeTabManager.tabBar isTabPinnedAtIndex:i]) continue;
-        EditorView *ed = all[i];
-        if ([self _promptSaveBeforeClose:ed])
-            [_activeTabManager closeEditor:ed];
+        [toClose addObject:all[i]];
     }
-    [self updateTitle];
+    [self _closeEditors:toClose inManager:_activeTabManager];
 }
 
 - (void)closeAllToRight:(id)sender {
@@ -8435,35 +8500,38 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     NSArray *all = _activeTabManager.allEditors;
     NSInteger idx = [all indexOfObject:current];
     if (idx == NSNotFound) return;
-    for (NSInteger i = (NSInteger)all.count - 1; i > idx; i--) {
+    NSMutableArray<EditorView *> *toClose = [NSMutableArray array];
+    for (NSInteger i = idx + 1; i < (NSInteger)all.count; i++) {
         if ([_activeTabManager.tabBar isTabPinnedAtIndex:i]) continue;
-        EditorView *ed = all[i];
-        if ([self _promptSaveBeforeClose:ed])
-            [_activeTabManager closeEditor:ed];
+        [toClose addObject:all[i]];
     }
-    [self updateTitle];
+    [self _closeEditors:toClose inManager:_activeTabManager];
 }
 
 - (void)closeAllUnchanged:(id)sender {
+    // Collect against the stable snapshot first: removing tabs mid-loop would
+    // shift the live tab-bar indices out from under isTabPinnedAtIndex:.
     NSArray *all = _activeTabManager.allEditors.copy;
+    NSMutableArray<EditorView *> *toClose = [NSMutableArray array];
     for (NSInteger i = 0; i < (NSInteger)all.count; i++) {
         EditorView *ed = all[i];
         if (ed.isModified) continue;
         if ([_activeTabManager.tabBar isTabPinnedAtIndex:i]) continue;
-        [_activeTabManager closeEditor:ed];
+        [toClose addObject:ed];
     }
+    for (EditorView *ed in toClose)
+        [_activeTabManager removeEditor:ed];  // unmodified — no prompt needed
     [self updateTitle];
 }
 
 - (void)closeAllButPinned:(id)sender {
     NSArray *all = _activeTabManager.allEditors.copy;
+    NSMutableArray<EditorView *> *toClose = [NSMutableArray array];
     for (NSInteger i = 0; i < (NSInteger)all.count; i++) {
         if ([_activeTabManager.tabBar isTabPinnedAtIndex:i]) continue;
-        EditorView *ed = all[i];
-        if ([self _promptSaveBeforeClose:ed])
-            [_activeTabManager closeEditor:ed];
+        [toClose addObject:all[i]];
     }
-    [self updateTitle];
+    [self _closeEditors:toClose inManager:_activeTabManager];
 }
 
 #pragma mark - Edit: Column Mode / Character Panel / Brace Select
@@ -10617,6 +10685,12 @@ static int64_t _sysctlInt(const char *name) {
 - (void)windowWillClose:(NSNotification *)n {
     [_autoSaveTimer invalidate];
     _autoSaveTimer = nil;
+    // The scroll-sync timer also targets self with repeats:YES; if a split with
+    // sync scrolling is active it would otherwise retain this controller forever
+    // (run-loop keeps the timer alive) and keep polling the closed window's
+    // editors. Mirror the _autoSaveTimer teardown above.
+    [_scrollSyncTimer invalidate];
+    _scrollSyncTimer = nil;
     [self saveWindowFrame];
     // Note: session already saved in windowShouldClose:
 
