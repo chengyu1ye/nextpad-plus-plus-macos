@@ -1,145 +1,92 @@
 #import "SearchEngine.h"
 #import "Scintilla.h"
-// EMPTYMATCH_* / SKIPCRLFASONE flag constants — matches Windows
-// boostregex/BoostRegexSearch.h. Consumed by regex/NppRegexSearch.cxx (our
-// SCI_OWNREGEX implementation).
-#import "../regex/NppRegexSearch.h"
+#import "NppScintillaIDs.h"
+#include "BoostRegexSearch.h"   // SCFIND_REGEXP_EMPTYMATCH_*
+#include <string>
+#include <vector>
+#include "../regex/NppSearchLoops.h"
 
-// Per-operation regex flag bundles. Mirrors Windows FindReplaceDlg.cpp:3000-3014
-// FINDNEXTTYPE_* matrix:
-//   - Single Find Next  → EMPTYMATCH_ALL (allow empty matches anywhere)
-//   - Find Next for Replace → also ALLOWATSTART (so user can replace the
-//     selected match without it being treated as a continuation)
-//   - Replace All / Find All / Mark All / Count → NOTAFTERMATCH (reject empty
-//     match at continuation startPos, the fix for issue #151)
-// All ops carry SKIPCRLFASONE so the advance-past-rejected-empty step treats
-// CRLF as one user character.
-static int kRegexEmptyFlagsFindNext      = SCFIND_REGEXP_EMPTYMATCH_ALL | SCFIND_REGEXP_SKIPCRLFASONE;
-static int kRegexEmptyFlagsFindForReplace = SCFIND_REGEXP_EMPTYMATCH_ALL | SCFIND_REGEXP_EMPTYMATCH_ALLOWATSTART | SCFIND_REGEXP_SKIPCRLFASONE;
-static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATCH | SCFIND_REGEXP_SKIPCRLFASONE;
+namespace {
 
-// ── NPPFindOptions ───────────────────────────────────────────────────────────
+/// The shared search loops (regex/NppSearchLoops.h) driving a ScintillaView
+/// through its target: SCI_SEARCHINTARGET and SCI_REPLACETARGET(RE). Find in
+/// Files runs the same loops over a headless Document (NppBufferSearch).
+class ViewTarget final : public NppSearch::Target {
+public:
+    ViewTarget(ScintillaView *sci, const char *needle, const char *replacement, bool regexReplace)
+        : _sci(sci), _needle(needle), _needleLength(strlen(needle)),
+          _replacement(replacement ?: ""), _regexReplace(regexReplace) {}
 
-@implementation NPPFindOptions
-
-- (instancetype)init {
-    self = [super init];
-    if (self) {
-        _searchText  = @"";
-        _replaceText = @"";
-        _wrapAround  = YES;
-        _direction   = NPPSearchDown;
-        _searchType  = NPPSearchNormal;
-        _isRecursive = YES;
-        _filters     = @"*.*";
-        _markStyle   = 1;
+    NppSearch::Pos Find(NppSearch::Pos start, NppSearch::Pos end, NppSearch::Pos *matchEnd) override {
+        [_sci message:SCI_SETTARGETRANGE wParam:(uptr_t)start lParam:end];
+        sptr_t found;
+        if (_beginScan) {
+            // First Find of a loop: allow an empty match at the range start
+            // even if a Find Next or an earlier loop ended there.
+            _beginScan = false;
+            const sptr_t flags = [_sci message:SCI_GETSEARCHFLAGS];
+            [_sci message:SCI_SETSEARCHFLAGS
+                   wParam:(uptr_t)(flags | (sptr_t)(unsigned)SCFIND_REGEXP_EMPTYMATCH_ALLOWATSTART)];
+            found = [_sci message:SCI_SEARCHINTARGET wParam:_needleLength lParam:(sptr_t)_needle];
+            [_sci message:SCI_SETSEARCHFLAGS wParam:(uptr_t)flags];
+        } else {
+            found = [_sci message:SCI_SEARCHINTARGET wParam:_needleLength lParam:(sptr_t)_needle];
+        }
+        if (found < 0) {
+            // The Boost backend returns -2 for a regex_error (bad pattern, or
+            // its complexity limit while matching) and -3 for other failures.
+            if (found <= -2) failed = true;
+            return -1;
+        }
+        *matchEnd = [_sci message:SCI_GETTARGETEND];
+        return found;
     }
-    return self;
-}
 
-- (id)copyWithZone:(NSZone *)zone {
-    NPPFindOptions *c = [[NPPFindOptions alloc] init];
-    c.searchText      = _searchText;
-    c.replaceText     = _replaceText;
-    c.matchCase       = _matchCase;
-    c.wholeWord       = _wholeWord;
-    c.wrapAround      = _wrapAround;
-    c.inSelection     = _inSelection;
-    c.direction       = _direction;
-    c.searchType      = _searchType;
-    c.dotMatchesNewline = _dotMatchesNewline;
-    c.filters         = _filters;
-    c.directory       = _directory;
-    c.isRecursive     = _isRecursive;
-    c.isInHiddenDirs  = _isInHiddenDirs;
-    c.doPurge         = _doPurge;
-    c.doBookmarkLine  = _doBookmarkLine;
-    c.markStyle       = _markStyle;
-    c.projectPanel1   = _projectPanel1;
-    c.projectPanel2   = _projectPanel2;
-    c.projectPanel3   = _projectPanel3;
-    return c;
-}
+    void BeginScan() override { _beginScan = true; }
 
-@end
+    NppSearch::Pos Replace(NppSearch::Pos start, NppSearch::Pos end) override {
+        [_sci message:SCI_SETTARGETRANGE wParam:(uptr_t)start lParam:end];
+        return [_sci message:(_regexReplace ? SCI_REPLACETARGETRE : SCI_REPLACETARGET)
+                      wParam:(uptr_t)-1 lParam:(sptr_t)_replacement];
+    }
 
-// ── NPPSearchResult ──────────────────────────────────────────────────────────
+    /// The regex failed (rather than simply not matching) at some Find.
+    bool failed = false;
 
-@implementation NPPSearchResult
-@end
+private:
+    __unsafe_unretained ScintillaView *_sci;
+    const char *_needle;
+    size_t _needleLength;
+    const char *_replacement;
+    bool _regexReplace;
+    bool _beginScan = false;
+};
 
-// ── NPPFileResults ───────────────────────────────────────────────────────────
-
-@implementation NPPFileResults
-- (instancetype)init {
-    self = [super init];
-    if (self) _results = [NSMutableArray array];
-    return self;
-}
-@end
-
-// ── SearchEngine ─────────────────────────────────────────────────────────────
+} // namespace
 
 @implementation SearchEngine
 
-#pragma mark - Extended string expansion
-
-+ (NSString *)expandExtendedString:(NSString *)input {
-    if (!input.length) return input;
-
-    NSMutableData *data = [NSMutableData dataWithCapacity:input.length];
-    const char *s = input.UTF8String;
-    size_t len = strlen(s);
-
-    for (size_t i = 0; i < len; i++) {
-        if (s[i] == '\\' && i + 1 < len) {
-            char next = s[i + 1];
-            switch (next) {
-                case 'n':  { char c = '\n'; [data appendBytes:&c length:1]; i++; continue; }
-                case 'r':  { char c = '\r'; [data appendBytes:&c length:1]; i++; continue; }
-                case 't':  { char c = '\t'; [data appendBytes:&c length:1]; i++; continue; }
-                case '0':  { char c = '\0'; [data appendBytes:&c length:1]; i++; continue; }
-                case '\\': { char c = '\\'; [data appendBytes:&c length:1]; i++; continue; }
-                case 'x': case 'X': {
-                    if (i + 3 < len) {
-                        char hex[3] = { s[i+2], s[i+3], 0 };
-                        char *end = NULL;
-                        long val = strtol(hex, &end, 16);
-                        if (end == hex + 2) {
-                            char c = (char)val;
-                            [data appendBytes:&c length:1];
-                            i += 3;
-                            continue;
-                        }
-                    }
-                    break;
-                }
-                default: break;
-            }
-        }
-        [data appendBytes:&s[i] length:1];
-    }
-    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: input;
+// The variants without regexFailed: (macro playback, menu Find Next) treat a
+// failed regex like "not found".
++ (BOOL)findInView:(ScintillaView *)sci options:(NPPFindOptions *)opts forward:(BOOL)forward {
+    return [self findInView:sci options:opts forward:forward regexFailed:NULL];
 }
-
-#pragma mark - Scintilla flags
-
-+ (int)scintillaFlagsForOptions:(NPPFindOptions *)opts {
-    int flags = 0;
-    if (opts.matchCase) flags |= SCFIND_MATCHCASE;
-    if (opts.wholeWord && opts.searchType != NPPSearchRegex) flags |= SCFIND_WHOLEWORD;
-    if (opts.searchType == NPPSearchRegex) {
-        // Issue #108 — SCFIND_POSIX selects Scintilla's RESearch engine which
-        // lacks `|` alternation, lookaheads, non-capturing groups, and `\b`
-        // word boundaries (RESearch uses `\<` and `\>` instead). SCFIND_CXX11REGEX
-        // routes to std::regex (ECMAScript flavor), giving feature parity with
-        // Windows NPP Boost.Regex for in-line patterns. Multi-line patterns
-        // crossing `\n` still don't work because our build doesn't define
-        // REGEX_MULTILINE — the line-by-line scan in MatchOnLines remains.
-        flags |= SCFIND_REGEXP | SCFIND_CXX11REGEX;
-        if (opts.dotMatchesNewline) flags |= SCFIND_REGEXP_DOTMATCHESNL;
-    }
-    return flags;
++ (BOOL)replaceInView:(ScintillaView *)sci options:(NPPFindOptions *)opts {
+    return [self replaceInView:sci options:opts regexFailed:NULL];
+}
++ (NSInteger)replaceAllInView:(ScintillaView *)sci options:(NPPFindOptions *)opts {
+    return [self replaceAllInView:sci options:opts regexFailed:NULL];
+}
++ (NSInteger)countInView:(ScintillaView *)sci options:(NPPFindOptions *)opts {
+    return [self countInView:sci options:opts regexFailed:NULL];
+}
++ (NSArray<NPPSearchResult *> *)findAllInView:(ScintillaView *)sci
+                                     filePath:(NSString *)path
+                                      options:(NPPFindOptions *)opts {
+    return [self findAllInView:sci filePath:path options:opts regexFailed:NULL];
+}
++ (NSInteger)markAllInView:(ScintillaView *)sci options:(NPPFindOptions *)opts {
+    return [self markAllInView:sci options:opts regexFailed:NULL];
 }
 
 /// Prepare the search needle, applying Extended expansion if needed. Returns UTF8 C string.
@@ -150,15 +97,35 @@ static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATC
     return text.UTF8String;
 }
 
+/// The Replace with text as passed to SCI_REPLACETARGET(RE).
++ (const char *)preparedReplacement:(NPPFindOptions *)opts {
+    NSString *replaceText = opts.replaceText ?: @"";
+    if (opts.searchType == NPPSearchExtended)
+        replaceText = [self expandExtendedString:replaceText];
+    return replaceText.UTF8String;
+}
+
++ (NSString *)wordCharsOfView:(ScintillaView *)sci {
+    const sptr_t length = [sci message:SCI_GETWORDCHARS wParam:0 lParam:0];
+    if (length <= 0) return @"";
+    std::string chars((size_t)length + 1, '\0');
+    [sci message:SCI_GETWORDCHARS wParam:0 lParam:(sptr_t)chars.data()];
+    chars.resize((size_t)length);
+    // Bytes, not text: Latin-1 keeps each one as one character.
+    return [[NSString alloc] initWithBytes:chars.data() length:chars.size()
+                                  encoding:NSISOLatin1StringEncoding] ?: @"";
+}
+
 #pragma mark - Find
 
-+ (BOOL)findInView:(ScintillaView *)sci options:(NPPFindOptions *)opts forward:(BOOL)forward {
++ (BOOL)findInView:(ScintillaView *)sci options:(NPPFindOptions *)opts forward:(BOOL)forward
+       regexFailed:(nullable BOOL *)regexFailed {
+    if (regexFailed) *regexFailed = NO;
     if (!opts.searchText.length) return NO;
 
     const char *needle = [self preparedNeedle:opts];
     size_t needleLen = strlen(needle);
-    int flags = [self scintillaFlagsForOptions:opts];
-    if (opts.searchType == NPPSearchRegex) flags |= kRegexEmptyFlagsFindNext;
+    int flags = [self findNextFlagsForOptions:opts];
 
     sptr_t docLen = [sci message:SCI_GETLENGTH];
     sptr_t selStart = [sci message:SCI_GETSELECTIONSTART];
@@ -177,6 +144,10 @@ static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATC
 
     [sci message:SCI_SETTARGETRANGE wParam:(uptr_t)searchStart lParam:searchEnd];
     sptr_t found = [sci message:SCI_SEARCHINTARGET wParam:needleLen lParam:(sptr_t)needle];
+    if (found <= -2) {
+        if (regexFailed) *regexFailed = YES;
+        return NO;
+    }
 
     // Wrap around if not found and option is on
     if (found < 0 && opts.wrapAround) {
@@ -186,6 +157,10 @@ static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATC
             [sci message:SCI_SETTARGETRANGE wParam:docLen lParam:searchEnd];
         }
         found = [sci message:SCI_SEARCHINTARGET wParam:needleLen lParam:(sptr_t)needle];
+        if (found <= -2) {
+            if (regexFailed) *regexFailed = YES;
+            return NO;
+        }
     }
 
     if (found >= 0) {
@@ -199,17 +174,18 @@ static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATC
 
 #pragma mark - Replace
 
-+ (BOOL)replaceInView:(ScintillaView *)sci options:(NPPFindOptions *)opts {
++ (BOOL)replaceInView:(ScintillaView *)sci options:(NPPFindOptions *)opts
+          regexFailed:(nullable BOOL *)regexFailed {
+    if (regexFailed) *regexFailed = NO;
     if (!opts.searchText.length) return NO;
 
     const char *needle = [self preparedNeedle:opts];
-    int flags = [self scintillaFlagsForOptions:opts];
     // Selection-match probe: the selection IS what the user picked to replace
     // — allow empty match exactly at its start so e.g. `$` matches a previously
     // found end-of-line selection. The follow-up Find Next then uses the
     // FindNext flag set (no ALLOWATSTART, so the freshly-replaced position
     // doesn't trigger another zero-width match at the same byte).
-    if (opts.searchType == NPPSearchRegex) flags |= kRegexEmptyFlagsFindForReplace;
+    int flags = [self findForReplaceFlagsForOptions:opts];
 
     // Check if current selection matches
     sptr_t selStart = [sci message:SCI_GETSELECTIONSTART];
@@ -219,14 +195,15 @@ static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATC
         [sci message:SCI_SETSEARCHFLAGS wParam:(uptr_t)flags];
         [sci message:SCI_SETTARGETRANGE wParam:(uptr_t)selStart lParam:selEnd];
         sptr_t found = [sci message:SCI_SEARCHINTARGET wParam:strlen(needle) lParam:(sptr_t)needle];
+        if (found <= -2) {
+            if (regexFailed) *regexFailed = YES;
+            return NO;
+        }
 
         if (found >= 0 && [sci message:SCI_GETTARGETSTART] == selStart &&
             [sci message:SCI_GETTARGETEND] == selEnd) {
             // Current selection matches — replace it
-            NSString *replaceText = opts.replaceText ?: @"";
-            if (opts.searchType == NPPSearchExtended)
-                replaceText = [self expandExtendedString:replaceText];
-            const char *replacement = replaceText.UTF8String;
+            const char *replacement = [self preparedReplacement:opts];
 
             if (opts.searchType == NPPSearchRegex)
                 [sci message:SCI_REPLACETARGETRE wParam:(uptr_t)-1 lParam:(sptr_t)replacement];
@@ -236,26 +213,23 @@ static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATC
     }
 
     // Find next
-    return [self findInView:sci options:opts forward:(opts.direction == NPPSearchDown)];
+    return [self findInView:sci options:opts forward:(opts.direction == NPPSearchDown)
+                regexFailed:regexFailed];
 }
 
 #pragma mark - Replace All
 
-+ (NSInteger)replaceAllInView:(ScintillaView *)sci options:(NPPFindOptions *)opts {
++ (NSInteger)replaceAllInView:(ScintillaView *)sci options:(NPPFindOptions *)opts
+                 regexFailed:(nullable BOOL *)regexFailed {
+    if (regexFailed) *regexFailed = NO;
     if (!opts.searchText.length) return 0;
 
     const char *needle = [self preparedNeedle:opts];
-    size_t needleLen = strlen(needle);
-    int flags = [self scintillaFlagsForOptions:opts];
     // Loop semantics — see Windows FindReplaceDlg.cpp:3461. NOTAFTERMATCH
     // rejects zero-width matches at the continuation position, the fix for
     // issue #151 ($ → X freezing on docs ending with \n).
-    if (opts.searchType == NPPSearchRegex) flags |= kRegexEmptyFlagsLoopOp;
-
-    NSString *replaceText = opts.replaceText ?: @"";
-    if (opts.searchType == NPPSearchExtended)
-        replaceText = [self expandExtendedString:replaceText];
-    const char *replacement = replaceText.UTF8String;
+    int flags = [self loopFlagsForOptions:opts];
+    const char *replacement = [self preparedReplacement:opts];
 
     [sci message:SCI_SETSEARCHFLAGS wParam:(uptr_t)flags];
     [sci message:SCI_BEGINUNDOACTION];
@@ -275,56 +249,29 @@ static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATC
         rangeEnd   = [sci message:SCI_GETLENGTH];
     }
 
-    NSInteger count = 0;
-    sptr_t pos = rangeStart;
-
-    while (pos < rangeEnd) {
-        [sci message:SCI_SETTARGETRANGE wParam:(uptr_t)pos lParam:rangeEnd];
-        sptr_t found = [sci message:SCI_SEARCHINTARGET wParam:needleLen lParam:(sptr_t)needle];
-        if (found < 0) break;
-
-        sptr_t targetEnd = [sci message:SCI_GETTARGETEND];
-        sptr_t replLen;
-        if (opts.searchType == NPPSearchRegex)
-            replLen = [sci message:SCI_REPLACETARGETRE wParam:(uptr_t)-1 lParam:(sptr_t)replacement];
-        else
-            replLen = [sci message:SCI_REPLACETARGET wParam:(uptr_t)-1 lParam:(sptr_t)replacement];
-
-        sptr_t delta = replLen - (targetEnd - found);
-        rangeEnd += delta;
-        pos = found + replLen;
-        if (pos <= found) pos = found + 1; // prevent infinite loop on zero-length match
-        count++;
-    }
+    ViewTarget target(sci, needle, replacement, opts.searchType == NPPSearchRegex);
+    NSInteger count = (NSInteger)NppSearch::ReplaceAll(target, rangeStart, rangeEnd);
 
     [sci message:SCI_ENDUNDOACTION];
+    // As on Windows, replacements made before the failure stay (one undo step).
+    if (regexFailed) *regexFailed = target.failed;
     return count;
 }
 
 #pragma mark - Count
 
-+ (NSInteger)countInView:(ScintillaView *)sci options:(NPPFindOptions *)opts {
++ (NSInteger)countInView:(ScintillaView *)sci options:(NPPFindOptions *)opts
+            regexFailed:(nullable BOOL *)regexFailed {
+    if (regexFailed) *regexFailed = NO;
     if (!opts.searchText.length) return 0;
 
     const char *needle = [self preparedNeedle:opts];
-    size_t needleLen = strlen(needle);
-    int flags = [self scintillaFlagsForOptions:opts];
-    if (opts.searchType == NPPSearchRegex) flags |= kRegexEmptyFlagsLoopOp;
+    [sci message:SCI_SETSEARCHFLAGS wParam:(uptr_t)[self loopFlagsForOptions:opts]];
 
-    [sci message:SCI_SETSEARCHFLAGS wParam:(uptr_t)flags];
-
-    sptr_t docLen = [sci message:SCI_GETLENGTH];
-    NSInteger count = 0;
-    sptr_t pos = 0;
-
-    while (pos < docLen) {
-        [sci message:SCI_SETTARGETRANGE wParam:(uptr_t)pos lParam:docLen];
-        sptr_t found = [sci message:SCI_SEARCHINTARGET wParam:needleLen lParam:(sptr_t)needle];
-        if (found < 0) break;
-        sptr_t end = [sci message:SCI_GETTARGETEND];
-        pos = end > found ? end : found + 1;
-        count++;
-    }
+    ViewTarget target(sci, needle, nullptr, false);
+    NSInteger count = (NSInteger)NppSearch::ForEachMatch(target, 0, [sci message:SCI_GETLENGTH],
+        [](NppSearch::Pos, NppSearch::Pos) { return true; });
+    if (regexFailed) *regexFailed = target.failed;
     return count;
 }
 
@@ -332,72 +279,67 @@ static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATC
 
 + (NSArray<NPPSearchResult *> *)findAllInView:(ScintillaView *)sci
                                      filePath:(NSString *)path
-                                      options:(NPPFindOptions *)opts {
+                                      options:(NPPFindOptions *)opts
+                                  regexFailed:(nullable BOOL *)regexFailed {
+    if (regexFailed) *regexFailed = NO;
     if (!opts.searchText.length) return @[];
 
     const char *needle = [self preparedNeedle:opts];
-    size_t needleLen = strlen(needle);
-    int flags = [self scintillaFlagsForOptions:opts];
-    if (opts.searchType == NPPSearchRegex) flags |= kRegexEmptyFlagsLoopOp;
+    [sci message:SCI_SETSEARCHFLAGS wParam:(uptr_t)[self loopFlagsForOptions:opts]];
 
-    [sci message:SCI_SETSEARCHFLAGS wParam:(uptr_t)flags];
-
-    sptr_t docLen = [sci message:SCI_GETLENGTH];
-    NSMutableArray *results = [NSMutableArray array];
-    sptr_t pos = 0;
-
-    while (pos < docLen) {
-        [sci message:SCI_SETTARGETRANGE wParam:(uptr_t)pos lParam:docLen];
-        sptr_t found = [sci message:SCI_SEARCHINTARGET wParam:needleLen lParam:(sptr_t)needle];
-        if (found < 0) break;
-        sptr_t end = [sci message:SCI_GETTARGETEND];
-
-        // Get line number and line text
-        sptr_t line = [sci message:SCI_LINEFROMPOSITION wParam:(uptr_t)found];
-        sptr_t lineStart = [sci message:SCI_POSITIONFROMLINE wParam:(uptr_t)line];
-        sptr_t lineEnd   = [sci message:SCI_GETLINEENDPOSITION wParam:(uptr_t)line];
-        sptr_t lineLen   = lineEnd - lineStart;
-
-        // Get line text
-        char *buf = (char *)calloc(lineLen + 1, 1);
-        struct Sci_TextRangeFull tr;
-        tr.chrg.cpMin = lineStart;
-        tr.chrg.cpMax = lineEnd;
-        tr.lpstrText  = buf;
-        [sci message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&tr];
-
-        NPPSearchResult *r = [[NPPSearchResult alloc] init];
-        r.filePath    = path ?: @"";
-        r.lineNumber  = line + 1; // 1-based
-        r.lineText    = [NSString stringWithUTF8String:buf] ?: @"";
-        r.matchStart  = found - lineStart;
-        r.matchLength = end - found;
-        [results addObject:r];
-
-        free(buf);
-        pos = end > found ? end : found + 1;
+    NSMutableArray<NPPSearchResult *> *results = [NSMutableArray array];
+    ViewTarget target(sci, needle, nullptr, false);
+    std::vector<char> lineBuf;
+    sptr_t cachedLine = -1;
+    sptr_t lineStart = 0, lineEnd = 0;
+    NppSearch::ForEachMatch(target, 0, [sci message:SCI_GETLENGTH],
+        [&](NppSearch::Pos found, NppSearch::Pos end) {
+            sptr_t line = [sci message:SCI_LINEFROMPOSITION wParam:(uptr_t)found];
+            if (line != cachedLine) {
+                cachedLine = line;
+                lineStart = [sci message:SCI_POSITIONFROMLINE wParam:(uptr_t)line];
+                lineEnd   = [sci message:SCI_GETLINEENDPOSITION wParam:(uptr_t)line];
+                lineBuf.assign((size_t)(lineEnd - lineStart) + 1, '\0');
+                struct Sci_TextRangeFull tr;
+                tr.chrg.cpMin = lineStart;
+                tr.chrg.cpMax = lineEnd;
+                tr.lpstrText  = lineBuf.data();
+                [sci message:SCI_GETTEXTRANGEFULL wParam:0 lParam:(sptr_t)&tr];
+            }
+            [self appendHitToResults:results
+                            filePath:path
+                          lineNumber:line + 1   // 1-based
+                           lineBytes:lineBuf.data()
+                          lineLength:(NSUInteger)(lineEnd - lineStart)
+                            hitStart:(NSUInteger)(found - lineStart)
+                              hitEnd:(NSUInteger)(end - lineStart)];
+            return true;
+        });
+    if (target.failed) {
+        // No silently truncated list.
+        if (regexFailed) *regexFailed = YES;
+        return @[];
     }
     return results;
 }
 
 #pragma mark - Mark All
 
-+ (NSInteger)markAllInView:(ScintillaView *)sci options:(NPPFindOptions *)opts {
++ (NSInteger)markAllInView:(ScintillaView *)sci options:(NPPFindOptions *)opts
+             regexFailed:(nullable BOOL *)regexFailed {
+    if (regexFailed) *regexFailed = NO;
     if (!opts.searchText.length) return 0;
 
     const char *needle = [self preparedNeedle:opts];
-    size_t needleLen = strlen(needle);
-    int flags = [self scintillaFlagsForOptions:opts];
-    if (opts.searchType == NPPSearchRegex) flags |= kRegexEmptyFlagsLoopOp;
+    int flags = [self loopFlagsForOptions:opts];
 
-    // Mark indicator slot: use indicator 31 for "Find Mark Style"
-    static const int kFindMarkIndicator = 31;
+    // Mark indicator slot: kFindMarkIndicator (31) for "Find Mark Style"
 
     if (opts.doPurge) {
         [sci message:SCI_SETINDICATORCURRENT wParam:kFindMarkIndicator];
         [sci message:SCI_INDICATORCLEARRANGE wParam:0 lParam:[sci message:SCI_GETLENGTH]];
         if (opts.doBookmarkLine) {
-            [sci message:SCI_MARKERDELETEALL wParam:20]; // bookmark marker 20
+            [sci message:SCI_MARKERDELETEALL wParam:kBookmarkMarker];
         }
     }
 
@@ -408,298 +350,19 @@ static int kRegexEmptyFlagsLoopOp        = SCFIND_REGEXP_EMPTYMATCH_NOTAFTERMATC
 
     [sci message:SCI_SETSEARCHFLAGS wParam:(uptr_t)flags];
 
-    sptr_t docLen = [sci message:SCI_GETLENGTH];
-    NSInteger count = 0;
-    sptr_t pos = 0;
-
-    while (pos < docLen) {
-        [sci message:SCI_SETTARGETRANGE wParam:(uptr_t)pos lParam:docLen];
-        sptr_t found = [sci message:SCI_SEARCHINTARGET wParam:needleLen lParam:(sptr_t)needle];
-        if (found < 0) break;
-        sptr_t end = [sci message:SCI_GETTARGETEND];
-
-        [sci message:SCI_INDICATORFILLRANGE wParam:(uptr_t)found lParam:end - found];
-
-        if (opts.doBookmarkLine) {
-            sptr_t line = [sci message:SCI_LINEFROMPOSITION wParam:(uptr_t)found];
-            [sci message:SCI_MARKERADD wParam:(uptr_t)line lParam:20]; // bookmark marker
-        }
-
-        pos = end > found ? end : found + 1;
-        count++;
-    }
+    const BOOL bookmark = opts.doBookmarkLine;
+    ViewTarget target(sci, needle, nullptr, false);
+    NSInteger count = (NSInteger)NppSearch::ForEachMatch(target, 0, [sci message:SCI_GETLENGTH],
+        [&](NppSearch::Pos found, NppSearch::Pos end) {
+            [sci message:SCI_INDICATORFILLRANGE wParam:(uptr_t)found lParam:end - found];
+            if (bookmark) {
+                sptr_t line = [sci message:SCI_LINEFROMPOSITION wParam:(uptr_t)found];
+                [sci message:SCI_MARKERADD wParam:(uptr_t)line lParam:kBookmarkMarker];
+            }
+            return true;
+        });
+    if (regexFailed) *regexFailed = target.failed;
     return count;
 }
-
-#pragma mark - Find in Directory
-
-+ (NSArray<NPPFileResults *> *)findInDirectory:(NSString *)directory
-                                       options:(NPPFindOptions *)opts
-                                 progressBlock:(nullable void(^)(NSString *currentFile, NSInteger hits))progressBlock
-                                    cancelFlag:(BOOL *)cancelFlag
-                            totalFilesScanned:(nullable NSInteger *)totalFilesScanned {
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSDirectoryEnumerator *en = [fm enumeratorAtPath:directory];
-    if (!opts.isRecursive) [en skipDescendants];
-
-    NSString *searchText = opts.searchText;
-    if (opts.searchType == NPPSearchExtended)
-        searchText = [self expandExtendedString:searchText];
-
-    // Build file filter predicates
-    NSArray<NSString *> *globs = [opts.filters componentsSeparatedByCharactersInSet:
-        [NSCharacterSet characterSetWithCharactersInString:@", "]];
-    NSMutableArray<NSPredicate *> *preds = [NSMutableArray array];
-    for (NSString *g in globs) {
-        NSString *t = [g stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if (t.length) [preds addObject:[NSPredicate predicateWithFormat:@"SELF LIKE[c] %@", t]];
-    }
-
-    NSStringCompareOptions cmpOpts = opts.matchCase ? 0 : NSCaseInsensitiveSearch;
-    NSMutableArray<NPPFileResults *> *allResults = [NSMutableArray array];
-    __block NSInteger totalHits = 0;
-    NSInteger filesScanned = 0;
-    NSString *rel;
-
-    // Compile the regex once for the whole call — pattern, case-sensitivity,
-    // and dot-matches-newline are invariant across every file and line. The
-    // sister function findInFilePaths: does the same.
-    NSRegularExpression *re = nil;
-    if (opts.searchType == NPPSearchRegex) {
-        NSRegularExpressionOptions reOpts = 0;
-        if (!opts.matchCase) reOpts |= NSRegularExpressionCaseInsensitive;
-        if (opts.dotMatchesNewline) reOpts |= NSRegularExpressionDotMatchesLineSeparators;
-        re = [NSRegularExpression regularExpressionWithPattern:searchText
-                                                       options:reOpts error:nil];
-        if (!re) {
-            if (totalFilesScanned) *totalFilesScanned = 0;
-            return allResults;
-        }
-    }
-
-    while ((rel = [en nextObject])) {
-        if (cancelFlag && *cancelFlag) break;
-
-        NSString *full = [directory stringByAppendingPathComponent:rel];
-        BOOL isDir = NO;
-        [fm fileExistsAtPath:full isDirectory:&isDir];
-        if (isDir) {
-            // Skip hidden directories
-            if (!opts.isInHiddenDirs && [rel.lastPathComponent hasPrefix:@"."]) {
-                [en skipDescendants];
-            }
-            continue;
-        }
-
-        // Skip hidden files
-        if (!opts.isInHiddenDirs && [rel.lastPathComponent hasPrefix:@"."]) continue;
-
-        // Apply file filter
-        NSString *name = rel.lastPathComponent;
-        BOOL pass = (preds.count == 0);
-        for (NSPredicate *p in preds) {
-            if ([p evaluateWithObject:name]) { pass = YES; break; }
-        }
-        if (!pass) continue;
-
-        filesScanned++;
-
-        // Read file
-        NSString *content = [NSString stringWithContentsOfFile:full
-                                                     encoding:NSUTF8StringEncoding error:nil];
-        if (!content) continue;
-
-        NSArray<NSString *> *lines = [content componentsSeparatedByString:@"\n"];
-        NPPFileResults *fileRes = nil;
-
-        for (NSInteger ln = 0; ln < (NSInteger)lines.count; ln++) {
-            if (cancelFlag && *cancelFlag) break;
-
-            NSString *line = lines[ln];
-            NSRange range;
-
-            if (opts.searchType == NPPSearchRegex) {
-                NSTextCheckingResult *m = [re firstMatchInString:line options:0
-                                                          range:NSMakeRange(0, line.length)];
-                if (!m) continue;
-                range = m.range;
-            } else {
-                range = [line rangeOfString:searchText options:cmpOpts];
-                if (range.location == NSNotFound) continue;
-            }
-
-            // Whole word check for non-regex
-            if (opts.wholeWord && opts.searchType != NPPSearchRegex) {
-                if (range.location > 0) {
-                    unichar c = [line characterAtIndex:range.location - 1];
-                    if ([[NSCharacterSet alphanumericCharacterSet] characterIsMember:c] || c == '_')
-                        continue;
-                }
-                NSUInteger endPos = range.location + range.length;
-                if (endPos < line.length) {
-                    unichar c = [line characterAtIndex:endPos];
-                    if ([[NSCharacterSet alphanumericCharacterSet] characterIsMember:c] || c == '_')
-                        continue;
-                }
-            }
-
-            if (!fileRes) {
-                fileRes = [[NPPFileResults alloc] init];
-                fileRes.filePath = full;
-            }
-
-            NPPSearchResult *r = [[NPPSearchResult alloc] init];
-            r.filePath    = full;
-            r.lineNumber  = ln + 1;
-            r.lineText    = line;
-            r.matchStart  = (NSInteger)range.location;
-            r.matchLength = (NSInteger)range.length;
-            [fileRes.results addObject:r];
-        }
-
-        if (fileRes) {
-            totalHits += (NSInteger)fileRes.results.count;
-            [allResults addObject:fileRes];
-            if (progressBlock) {
-                NSInteger h = totalHits;
-                NSString *f = full;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    progressBlock(f, h);
-                });
-            }
-        }
-    }
-    if (totalFilesScanned) *totalFilesScanned = filesScanned;
-    return allResults;
-}
-
-+ (NSArray<NPPFileResults *> *)findInFilePaths:(NSArray<NSString *> *)filePaths
-                                       options:(NPPFindOptions *)opts
-                                 progressBlock:(nullable void(^)(NSString *currentFile, NSInteger hits))progressBlock
-                                    cancelFlag:(BOOL *)cancelFlag
-                            totalFilesScanned:(nullable NSInteger *)totalFilesScanned {
-    NSFileManager *fm = [NSFileManager defaultManager];
-
-    NSString *searchText = opts.searchText;
-    if (opts.searchType == NPPSearchExtended)
-        searchText = [self expandExtendedString:searchText];
-
-    // Build file filter predicates
-    NSArray<NSString *> *globs = [opts.filters componentsSeparatedByCharactersInSet:
-        [NSCharacterSet characterSetWithCharactersInString:@", "]];
-    NSMutableArray<NSPredicate *> *preds = [NSMutableArray array];
-    for (NSString *g in globs) {
-        NSString *t = [g stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-        if (t.length) [preds addObject:[NSPredicate predicateWithFormat:@"SELF LIKE[c] %@", t]];
-    }
-
-    NSStringCompareOptions cmpOpts = opts.matchCase ? 0 : NSCaseInsensitiveSearch;
-    NSMutableArray<NPPFileResults *> *allResults = [NSMutableArray array];
-    __block NSInteger totalHits = 0;
-    NSInteger filesScanned = 0;
-
-    // Compile the regex once for the whole call — pattern, case-sensitivity,
-    // and dot-matches-newline are invariant across every file and line.
-    // (PR #57 hoisted this out of the per-line loop; we hoist further out
-    // of the per-file loop too.) NSRegularExpression is documented thread-
-    // safe for read-only use, but we don't share across threads here anyway.
-    NSRegularExpression *re = nil;
-    if (opts.searchType == NPPSearchRegex) {
-        NSRegularExpressionOptions reOpts = 0;
-        if (!opts.matchCase) reOpts |= NSRegularExpressionCaseInsensitive;
-        if (opts.dotMatchesNewline) reOpts |= NSRegularExpressionDotMatchesLineSeparators;
-        re = [NSRegularExpression regularExpressionWithPattern:searchText
-                                                       options:reOpts error:nil];
-        if (!re) {
-            if (totalFilesScanned) *totalFilesScanned = 0;
-            return allResults;
-        }
-    }
-
-    for (NSString *full in filePaths) {
-        if (cancelFlag && *cancelFlag) break;
-
-        // Check file exists
-        if (![fm fileExistsAtPath:full]) continue;
-
-        // Apply file filter
-        NSString *name = full.lastPathComponent;
-        BOOL pass = (preds.count == 0);
-        for (NSPredicate *p in preds) {
-            if ([p evaluateWithObject:name]) { pass = YES; break; }
-        }
-        if (!pass) continue;
-
-        filesScanned++;
-
-        // Read file
-        NSString *content = [NSString stringWithContentsOfFile:full
-                                                     encoding:NSUTF8StringEncoding error:nil];
-        if (!content) continue;
-
-        NSArray<NSString *> *lines = [content componentsSeparatedByString:@"\n"];
-        NPPFileResults *fileRes = nil;
-
-        for (NSInteger ln = 0; ln < (NSInteger)lines.count; ln++) {
-            if (cancelFlag && *cancelFlag) break;
-
-            NSString *line = lines[ln];
-            NSRange range;
-
-            if (opts.searchType == NPPSearchRegex) {
-                NSTextCheckingResult *m = [re firstMatchInString:line options:0
-                                                          range:NSMakeRange(0, line.length)];
-                if (!m) continue;
-                range = m.range;
-            } else {
-                range = [line rangeOfString:searchText options:cmpOpts];
-                if (range.location == NSNotFound) continue;
-            }
-
-            // Whole word check for non-regex
-            if (opts.wholeWord && opts.searchType != NPPSearchRegex) {
-                if (range.location > 0) {
-                    unichar c = [line characterAtIndex:range.location - 1];
-                    if ([[NSCharacterSet alphanumericCharacterSet] characterIsMember:c] || c == '_')
-                        continue;
-                }
-                NSUInteger endPos = range.location + range.length;
-                if (endPos < line.length) {
-                    unichar c = [line characterAtIndex:endPos];
-                    if ([[NSCharacterSet alphanumericCharacterSet] characterIsMember:c] || c == '_')
-                        continue;
-                }
-            }
-
-            if (!fileRes) {
-                fileRes = [[NPPFileResults alloc] init];
-                fileRes.filePath = full;
-            }
-
-            NPPSearchResult *r = [[NPPSearchResult alloc] init];
-            r.filePath    = full;
-            r.lineNumber  = ln + 1;
-            r.lineText    = line;
-            r.matchStart  = (NSInteger)range.location;
-            r.matchLength = (NSInteger)range.length;
-            [fileRes.results addObject:r];
-        }
-
-        if (fileRes) {
-            totalHits += (NSInteger)fileRes.results.count;
-            [allResults addObject:fileRes];
-            if (progressBlock) {
-                NSInteger h = totalHits;
-                NSString *f = full;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    progressBlock(f, h);
-                });
-            }
-        }
-    }
-    if (totalFilesScanned) *totalFilesScanned = filesScanned;
-    return allResults;
-}
-
 
 @end

@@ -1,5 +1,6 @@
 #import "AppDelegate.h"
 #import "NppPaths.h"
+#import "NppModelXmlMerge.h"
 #import "NppApplication.h"
 #import "MainWindowController.h"
 #import "MenuBuilder.h"
@@ -11,9 +12,73 @@
 #import "UserDefineLangManager.h"
 #import "NppLangsManager.h"
 #import "EditorView.h"
+#import "ShortcutMapperWindowController.h"
 
 // Files opened from a folder beyond this count trigger a confirmation.
 static const NSUInteger kFolderOpenConfirmThreshold = 20;
+
+// ── Unclean-exit detection ──────────────────────────────────────────────────
+// running.marker exists from launch until -applicationWillTerminate:. Finding
+// it at launch means the previous run crashed, was force quit, or lost power,
+// unless the process it names is still running (a second instance, e.g. the
+// binary started from Terminal while the app is open).
+//
+// Keys: "launched" (this run's start), "pid", and "recoverSince" while a
+// recovery is pending. recoverSince carries the EARLIEST unclean start forward
+// until the recovery step has run, so a run that crashes during launch does not
+// hide the earlier run's backups behind its own, later, start time.
+static NSString *NppRunMarkerPath(void) {
+    return NppConfigSubpath(@"running.marker");
+}
+
+static BOOL    sOwnsRunMarker;   // NO when another live instance owns the marker
+static NSDate *sLaunchDate;
+
+static void NppWriteRunMarker(NSDate *recoverSince) {
+    NSMutableDictionary *marker = [@{ @"launched": sLaunchDate, @"pid": @(getpid()) } mutableCopy];
+    if (recoverSince) marker[@"recoverSince"] = recoverSince;
+    [marker writeToFile:NppRunMarkerPath() atomically:YES];
+}
+
+/// YES when `pid` is a live process of this app other than the caller.
+static BOOL NppIsOtherLiveInstance(pid_t pid) {
+    if (pid <= 0 || pid == getpid() || kill(pid, 0) != 0) return NO;
+    NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    NSString *mine = [NSBundle mainBundle].bundleIdentifier;
+    return app && mine && [app.bundleIdentifier isEqualToString:mine];
+}
+
+/// Record this launch. Returns the start of the earliest run whose backups have
+/// not been recovered after an unclean exit, or nil after a clean exit (or on
+/// first launch, or when another instance is live and owns the marker).
+static NSDate *NppMarkLaunch(void) {
+    NSString *path = NppRunMarkerPath();
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSDate *uncleanStart = nil;
+    sLaunchDate = [NSDate date];
+    if ([fm fileExistsAtPath:path]) {
+        NSDictionary *marker = [NSDictionary dictionaryWithContentsOfFile:path];
+        id pid = marker[@"pid"];
+        if ([pid isKindOfClass:[NSNumber class]] && NppIsOtherLiveInstance([pid intValue])) {
+            NSLog(@"[Nextpad++] another instance (pid %@) is running; skipping crash recovery", pid);
+            return nil;                                   // not ours: leave it alone
+        }
+        id since    = marker[@"recoverSince"];
+        id launched = marker[@"launched"];
+        uncleanStart = [since isKindOfClass:[NSDate class]]    ? since
+                     : [launched isKindOfClass:[NSDate class]] ? launched
+                     : ([fm attributesOfItemAtPath:path error:nil].fileModificationDate
+                        ?: [NSDate distantPast]);
+    }
+    sOwnsRunMarker = YES;
+    NppWriteRunMarker(uncleanStart);
+    return uncleanStart;
+}
+
+/// The recovery step ran: later launches need only look at this run.
+static void NppRecoveryDone(void) {
+    if (sOwnsRunMarker) NppWriteRunMarker(nil);
+}
 
 @interface AppDelegate ()
 - (NSArray<NSString *> *)_expandFolderArguments:(NSArray<NSString *> *)paths;
@@ -47,10 +112,18 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
     // Load config.xml preferences before building UI (applies saved XML → NSUserDefaults)
     readConfigXML();
 
+    // Move a never-customised Courier New 10 default in the user's stylers.xml
+    // to the Mac default editor font, before any editor reads the style store.
+    [NPPStyleStore migrateLegacyDefaultEditorFont];
+
     [MenuBuilder buildMainMenu];
 
     // Apply saved shortcut overrides from shortcuts.xml <InternalCommands>
     [self _loadShortcutOverrides];
+
+    // Create langs.xml / stylers.xml, or merge new model entries into them,
+    // before anything reads them.
+    NppInstallUserLangsAndStylers();
 
     // Load built-in language definitions from langs.xml (keywords, extensions, comments).
     [[NppLangsManager shared] loadLangs];
@@ -114,6 +187,11 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
     // Apply the user's saved language to the freshly-built English menu.
     [[NppLocalizer shared] autoLoad];
 
+    // Pick the editor theme for the current appearance before any EditorView
+    // is built (#370). NPPDarkModeChangedNotification only fires on a change,
+    // so an app launched in dark mode otherwise kept the light theme.
+    [[NPPStyleStore sharedStore] syncThemeWithAppearance];
+
     // Create the primary window
     self.mainWindowController = [[MainWindowController alloc] init];
     [_windowControllers addObject:self.mainWindowController];
@@ -150,6 +228,7 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
 
     // ── Session / file handling ─────────────────────────────────────────
 
+    NSDate *uncleanRunStart = NppMarkLaunch();
     BOOL hasContent = NO;
     if (cli.sessionFile.length) {
         [self.mainWindowController loadSessionFromPath:cli.sessionFile];
@@ -164,6 +243,15 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
         // editor on each launch. -nosession CLI flag still overrides per-invocation.
         hasContent = [self.mainWindowController restoreLastSession];
     }
+    // Crash recovery is its own step, whatever opened above (session, CLI
+    // files, -openSession, or nothing with the session off): after an unclean
+    // exit, backups that run wrote and no manifest names are the only copy of
+    // its unsaved text. After a clean exit nothing is recovered.
+    if (uncleanRunStart) {
+        if ([self.mainWindowController recoverBackupsFromUncleanExitSince:uncleanRunStart])
+            hasContent = YES;
+    }
+    NppRecoveryDone();
     // If nothing was opened, create an empty tab (first launch or -nosession with no files)
     if (!hasContent) {
         #pragma clang diagnostic push
@@ -362,7 +450,7 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
             [[NppLocalizer shared] translate:@"This will open %lu files in new tabs."],
             (unsigned long)result.count];
         [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Open"]];
-        [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+        [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
         if ([alert runModal] != NSAlertFirstButtonReturn) return nil;
     }
     return result;
@@ -418,7 +506,7 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
 
     if (lastEditor) {
         if (cli.language.length) [lastEditor setLanguage:cli.language];
-        if (cli.udlName.length) [lastEditor setLanguage:cli.udlName];
+        if (cli.udlName.length) [lastEditor setLanguage:cli.udlName preferUDL:YES];
         if (cli.readOnly) [lastEditor.scintillaView message:SCI_SETREADONLY wParam:1 lParam:0];
         if (cli.monitorFiles) lastEditor.monitoringMode = YES;
 
@@ -443,7 +531,26 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
     // Windows NPP behaviour: no save prompts on quit.
-    // Each window saves session + backups, then closes silently.
+    _isTerminating = YES;
+    //
+    // Write the session ONCE, up front, covering every window — session.plist
+    // and the backup directory are shared, single resources. The teardown loop
+    // below removes each controller as it closes it, so a per-window save would
+    // see fewer and fewer windows: the last window to close would overwrite
+    // session.plist with only its own tabs and then delete every other window's
+    // backup file, discarding unsaved work that had never been written to disk.
+    //
+    // Skip it when no live window is left. That happens when the user quits by
+    // closing the last window: AppKit runs windowShouldClose: (which saved,
+    // while that window was still registered), then the close observer
+    // deregisters it, and only then does AppKit ask us to terminate. Saving
+    // again here would see the just-closed window gone and overwrite its
+    // session entry and backups — reintroducing the very loss above.
+    MainWindowController *saver = nil;
+    for (MainWindowController *mwc in _windowControllers)
+        if (!mwc.windowHasClosed) { saver = mwc; break; }
+    if (saver && [saver sessionPersistenceEnabled]) [saver saveSessionForAllWindows];
+
     for (NSInteger i = (NSInteger)_windowControllers.count - 1; i >= 0; i--) {
         MainWindowController *mwc = _windowControllers[i];
         NSWindow *win = mwc.window;
@@ -458,6 +565,8 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     [[NppPluginManager shared] shutdown];
+    if (sOwnsRunMarker)
+        [[NSFileManager defaultManager] removeItemAtPath:NppRunMarkerPath() error:nil];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
@@ -579,30 +688,7 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
             hasCmd = YES; hasCtrl = NO;
         }
 
-        if (keyCode == 0) {
-            mi.keyEquivalent = @"";
-            mi.keyEquivalentModifierMask = 0;
-        } else {
-            NSEventModifierFlags mods = 0;
-            if (hasCmd)   mods |= NSEventModifierFlagCommand;
-            if (hasCtrl)  mods |= NSEventModifierFlagControl;
-            if (hasAlt)   mods |= NSEventModifierFlagOption;
-            if (hasShift) mods |= NSEventModifierFlagShift;
-
-            NSString *key = @"";
-            if (keyCode >= 'A' && keyCode <= 'Z')
-                key = [[NSString stringWithFormat:@"%c", (char)keyCode] lowercaseString];
-            else if (keyCode >= '0' && keyCode <= '9')
-                key = [NSString stringWithFormat:@"%c", (char)keyCode];
-            else if (keyCode >= 112 && keyCode <= 123) {
-                unichar fk = NSF1FunctionKey + (keyCode - 112);
-                key = [NSString stringWithCharacters:&fk length:1];
-            } else
-                key = [[NSString stringWithFormat:@"%c", (char)keyCode] lowercaseString];
-
-            mi.keyEquivalent = key;
-            mi.keyEquivalentModifierMask = mods;
-        }
+        NppApplyShortcutToMenuItem(mi, keyCode, hasCmd, hasCtrl, hasAlt, hasShift);
     };
 
     NSInteger totalApplied = 0;
@@ -723,16 +809,78 @@ static const NSUInteger kFolderOpenConfirmThreshold = 20;
     NSString *themesDir = NppConfigSubpath(@"themes");
     [fm createDirectoryAtPath:themesDir withIntermediateDirectories:YES attributes:nil error:nil];
 
-    NSInteger imported = 0;
+    // Clear scratch files a crash or a failed cleanup left behind: staging below
+    // names them ".<uuid>", so anything matching that and nothing else is ours.
+    for (NSString *name in [fm contentsOfDirectoryAtPath:themesDir error:nil]) {
+        if (![name hasPrefix:@"."]) continue;
+        if (![[NSUUID alloc] initWithUUIDString:[name substringFromIndex:1]]) continue;
+        [fm removeItemAtPath:[themesDir stringByAppendingPathComponent:name] error:nil];
+    }
+
+    NSInteger imported = 0, alreadyInstalled = 0;
+    NSMutableArray<NSString *> *failures = [NSMutableArray array];
+    NSString *firstFailureReason = nil;
+
     for (NSURL *url in panel.URLs) {
         NSString *destPath = [themesDir stringByAppendingPathComponent:url.lastPathComponent];
-        [fm removeItemAtPath:destPath error:nil]; // overwrite existing
-        if ([fm copyItemAtPath:url.path toPath:destPath error:nil]) {
+        NSURL    *destURL  = [NSURL fileURLWithPath:destPath];
+
+        // Picking a theme that already lives in themesDir used to delete the file
+        // and then fail the copy from it — destroying the theme outright. Source
+        // and destination being the same file means there is nothing to do.
+        if ([destURL.URLByResolvingSymlinksInPath.URLByStandardizingPath
+                isEqual:url.URLByResolvingSymlinksInPath.URLByStandardizingPath]) {
+            alreadyInstalled++;   // counted apart from imported: nothing was copied
+            continue;
+        }
+
+        // Stage the copy under a scratch name, then swap it in. The old code
+        // deleted the destination first, so any failed copy — unreadable source,
+        // full disk — left the user with neither the old theme nor the new one.
+        // The dot prefix and missing .xml suffix keep the scratch file out of the
+        // theme list if the app dies mid-import.
+        NSString *tmpPath = [themesDir stringByAppendingPathComponent:
+                             [@"." stringByAppendingString:[[NSUUID UUID] UUIDString]]];
+        NSError *err = nil;
+        if (![fm copyItemAtPath:url.path toPath:tmpPath error:&err]) {
+            [fm removeItemAtPath:tmpPath error:nil];
+            [failures addObject:url.lastPathComponent];
+            if (!firstFailureReason) firstFailureReason = err.localizedDescription;
+            continue;
+        }
+
+        BOOL replaced = [fm fileExistsAtPath:destPath]
+            ? [fm replaceItemAtURL:destURL
+                     withItemAtURL:[NSURL fileURLWithPath:tmpPath]
+                    backupItemName:nil
+                           options:0
+                  resultingItemURL:nil
+                             error:&err]
+            : [fm moveItemAtPath:tmpPath toPath:destPath error:&err];
+
+        if (replaced) {
             imported++;
+        } else {
+            [fm removeItemAtPath:tmpPath error:nil];
+            [failures addObject:url.lastPathComponent];
+            if (!firstFailureReason) firstFailureReason = err.localizedDescription;
         }
     }
 
-    if (imported > 0) {
+    // Silence used to be the only report of a failed import.
+    if (failures.count) {
+        NSAlert *a = [[NSAlert alloc] init];
+        a.messageText = [loc translate:@"Import Style Theme"];
+        NSString *list = [NSString stringWithFormat:
+            [loc translate:@"Could not import: %@"],
+            [failures componentsJoinedByString:@", "]];
+        a.informativeText = firstFailureReason.length
+            ? [NSString stringWithFormat:@"%@\n\n%@", list, firstFailureReason]
+            : list;
+        [a runModal];
+    }
+
+    if (imported > 0 || alreadyInstalled > 0) {
         // Open Style Configurator so user can select the newly imported theme
         [[StyleConfiguratorWindowController sharedController] showWindow:nil];
     }
@@ -909,7 +1057,7 @@ static NSString *const kUpdateMenuItemTag = @"checkForUpdatesMenuItem";
         (notes.length > 500) ? [[notes substringToIndex:500] stringByAppendingString:@"…"] : (notes ?: @"")];
     [alert addButtonWithTitle:[loc translate:@"Download"]];
     [alert addButtonWithTitle:[loc translate:@"Release Page"]];
-    [alert addButtonWithTitle:[loc translate:@"Later"]];
+    [alert addButtonWithTitle:[loc translate:@"Later"]].keyEquivalent = @"\033";
 
     NSModalResponse resp = [alert runModal];
 

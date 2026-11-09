@@ -11,6 +11,7 @@
 #import "FindWindow.h"
 #import "SearchResultsPanel.h"
 #import "SearchEngine.h"
+#import "NppScintillaIDs.h"
 #import "NPPBatchDialog.h"
 #import "MenuBuilder.h"
 #import "ColumnEditorPanel.h"
@@ -39,6 +40,7 @@
 #import "UserDefineLangManager.h"
 #import "UserDefineDialog.h"
 #import "NppThemeManager.h"
+#import "NppModelXmlMerge.h"
 #import "NppLocalizer.h"
 #import <objc/runtime.h>
 #include <sys/sysctl.h>
@@ -100,6 +102,41 @@ static NSString *nppBackupDir(void) {
 static NSString *nppSessionPath(void) {
     return [nppConfigDir() stringByAppendingPathComponent:@"session.plist"];
 }
+
+// Backup files this process is allowed to delete: those it restored or
+// recovered at launch, plus every backup it wrote itself. The session prune
+// removes only unreferenced files from this set. A backup nobody in this
+// process has seen (one a crash left behind before session.plist named it) is
+// the only copy of that text, so it is never collected unseen; the next
+// session restore recovers it instead. Main thread only.
+//
+// Paths are compared in canonical form (symlinks resolved): session.plist can
+// spell the backup directory differently from the one listed now, e.g. /tmp vs
+// /private/tmp, or a home reached through a symlink.
+static NSString *nppCanonicalPath(NSString *path) {
+    return path.stringByResolvingSymlinksInPath;
+}
+static NSMutableSet<NSString *> *nppKnownBackups(void) {
+    static NSMutableSet<NSString *> *known;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ known = [NSMutableSet set]; });
+    return known;
+}
+static void nppNoteKnownBackup(NSString *path) {
+    if (path.length) [nppKnownBackups() addObject:nppCanonicalPath(path)];
+}
+static BOOL nppIsKnownBackup(NSString *path) {
+    return [nppKnownBackups() containsObject:nppCanonicalPath(path)];
+}
+
+// Fingerprint of what the last periodic session.plist write captured; see
+// -_syncSessionManifest. Process-wide because session.plist is.
+static NSString *sLastManifestFingerprint;
+
+// YES once this process has written a session.plist that lists tabs. From then
+// on session.plist describes this run, so an empty tab set must be written too
+// (see the #87 guard in -saveSessionWithTabManagers:activeEditor:).
+static BOOL sWroteSessionTabsThisRun;
 // Forward declarations for shortcuts.xml functions (defined after @implementation)
 static NSString *nppShortcutsPath(void);
 // Non-static so NPPBatchDialog can link against it. Forward-declared here for
@@ -718,8 +755,12 @@ void readConfigXML(void) {
                 [ud setInteger:v.integerValue forKey:kPrefEOLType];
             if ((v = [el attributeForName:@"zoom"].stringValue))
                 [ud setInteger:v.integerValue forKey:kPrefZoomLevel];
-            if ((v = [el attributeForName:@"smoothFont"].stringValue))
-                [ud setInteger:v.integerValue forKey:kPrefFontQuality];
+            if ((v = [el attributeForName:@"smoothFont"].stringValue)) {
+                // SC_EFF_QUALITY_* is 0-3; anything else (hand-edited file)
+                // falls back to the default rather than an unlisted value.
+                NSInteger q = v.integerValue;
+                [ud setInteger:(q >= 0 && q <= 3) ? q : 3 forKey:kPrefFontQuality];
+            }
             if ((v = [el attributeForName:@"paddingLeft"].stringValue))
                 [ud setInteger:v.integerValue forKey:kPrefPaddingLeft];
             if ((v = [el attributeForName:@"paddingRight"].stringValue))
@@ -793,27 +834,9 @@ static void ensureNppDirs(void) {
         }
     }
 
-    // Copy langs.model.xml from bundle as langs.xml if user copy doesn't exist.
-    // User edits ~/Library/Application Support/Nextpad++/langs.xml to customize extensions, keywords, comment delimiters.
-    NSString *langsPath = [nppConfigDir() stringByAppendingPathComponent:@"langs.xml"];
-    if (![fm fileExistsAtPath:langsPath]) {
-        NSString *bundleCopy = [[NSBundle mainBundle] pathForResource:@"langs.model" ofType:@"xml"];
-        if (bundleCopy) {
-            [fm copyItemAtPath:bundleCopy toPath:langsPath error:nil];
-            NSLog(@"[Langs] Copied langs.model.xml as langs.xml to %@", nppConfigDir());
-        }
-    }
-
-    // Copy stylers.model.xml from bundle as stylers.xml if user copy doesn't exist.
-    // User edits ~/Library/Application Support/Nextpad++/stylers.xml to customize the Default theme styles.
-    NSString *stylersPath = [nppConfigDir() stringByAppendingPathComponent:@"stylers.xml"];
-    if (![fm fileExistsAtPath:stylersPath]) {
-        NSString *bundleCopy = [[NSBundle mainBundle] pathForResource:@"stylers.model" ofType:@"xml"];
-        if (bundleCopy) {
-            [fm copyItemAtPath:bundleCopy toPath:stylersPath error:nil];
-            NSLog(@"[Stylers] Copied stylers.model.xml as stylers.xml to %@", nppConfigDir());
-        }
-    }
+    // Copy langs.model.xml / stylers.model.xml from the bundle as langs.xml /
+    // stylers.xml if missing; merge newer model entries into existing copies.
+    NppInstallUserLangsAndStylers();
 
     // Create ~/Library/Application Support/Nextpad++/themes/ for user-installed themes (empty on first run).
     NSString *userThemesDir = [nppConfigDir() stringByAppendingPathComponent:@"themes"];
@@ -1972,12 +1995,15 @@ static void _nppTahoeRoundEditorCard(NSView *container, NSView *content) {
     NSLayoutConstraint *_subTabBarVZeroHeight;
     NSTimer          *_autoSaveTimer;
     /// YES once restoreLastSession has successfully opened ≥1 tab from the
-    /// stored session this launch. Used by saveSession to decide whether the
-    /// "preserve when empty" guard applies — see saveSession's Issue #87
+    /// stored session this launch. Used by the session save to decide whether
+    /// the "preserve when empty" guard applies — see the Issue #87
     /// comment for details. (Bug fix: closing all restored tabs and quitting
     /// would otherwise leave the prior session.plist untouched, so the same
     /// tabs reappeared on next launch.)
     BOOL              _didRestoreSession;
+    /// Set only around the periodic session write; see -_sessionBackupFor:inDirectory:.
+    BOOL              _sessionSaveReusesBackups;
+    BOOL              _isWindowReadyForResizeEvents;
 
     // Side panel host
     NSSplitView       *_editorSplitView;
@@ -2115,8 +2141,16 @@ static void _nppTahoeRoundEditorCard(NSView *container, NSView *content) {
             addObserver:self selector:@selector(_editorDidSave:)
                    name:EditorViewDidSaveNotification object:nil];
         [[NSNotificationCenter defaultCenter]
+            addObserver:self selector:@selector(_editorZoomDidChange:)
+                   name:EditorViewZoomDidChangeNotification object:nil];
+        [[NSNotificationCenter defaultCenter]
             addObserver:self selector:@selector(_shortcutsChanged:)
                    name:NPPShortcutsChangedNotification object:nil];
+        // UDL dialog saved / renamed / created / removed a UDL: refresh the
+        // Language menu entries and the status bar's language name.
+        [[NSNotificationCenter defaultCenter]
+            addObserver:self selector:@selector(_userDefineLangsChanged:)
+                   name:UserDefineLangsDidChangeNotification object:nil];
         // (scroll sync uses a timer, not notifications)
         [self rebuildRecentFilesMenu];
         [self rebuildUDLLanguageMenu];
@@ -2126,6 +2160,7 @@ static void _nppTahoeRoundEditorCard(NSView *container, NSView *content) {
                                                         selector:@selector(autoSaveTick:)
                                                         userInfo:nil
                                                          repeats:YES];
+        _autoSaveTimer.tolerance = 2.0;   // let macOS coalesce wakeups; timing is not critical
         [self _installScrollZoomMonitor];
     }
     return self;
@@ -2253,6 +2288,7 @@ static void _nppTahoeRoundEditorCard(NSView *container, NSView *content) {
         tb.allowsDisplayModeCustomization = NO;
     }
     self.window.toolbar = tb;
+    self.window.toolbar.visible = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefToolbarVisible];
     // Expanded style keeps the toolbar in its OWN row below the title bar for
     // BOTH profiles — matching the Classic layout and the Tahoe mockup. (Unified
     // crammed the icons into the title row, so we don't use it.) For Tahoe we make
@@ -4046,6 +4082,10 @@ static BOOL groupHasTrailingSep(NSString *ident) {
     [[NSNotificationCenter defaultCenter]
         addObserver:self selector:@selector(_prefsChanged:)
                name:@"NPPPreferencesChanged" object:nil];
+    // Listen for toolbar visibility toggles to update window state.
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self selector:@selector(_toolbarVisibilityChanged:)
+               name:@"NPPToolbarVisibilityChanged" object:nil];
     [[NSNotificationCenter defaultCenter]
         addObserver:self selector:@selector(_toolbarColorChanged:)
                name:@"NPPToolbarColorChanged" object:nil];
@@ -4087,8 +4127,16 @@ static BOOL groupHasTrailingSep(NSString *ident) {
     _editorSplitView.dividerStyle = NSSplitViewDividerStyleThin;
     _editorSplitView.delegate = self;
     _editorSplitView.translatesAutoresizingMaskIntoConstraints = NO;
-    [_editorSplitView addSubview:_hSplitView];
-    [_editorSplitView addSubview:_sidePanelHost];
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:kPrefDockPanelsOnLeft]) {
+        [_editorSplitView addSubview:_sidePanelHost];
+        [_editorSplitView addSubview:_hSplitView];
+    } else {
+        [_editorSplitView addSubview:_hSplitView];
+        [_editorSplitView addSubview:_sidePanelHost];
+    }
+    [[NSNotificationCenter defaultCenter]
+        addObserver:self selector:@selector(_dockPanelsLeftChanged)
+               name:@"NPPDockPanelsLeftChanged" object:nil];
     // Tahoe: round the side-panel "card" corners to match the editor card. Gated.
     if ([NppThemeManager shared].usesGlassMaterials) {
         _sidePanelHost.wantsLayer = YES;
@@ -4193,10 +4241,12 @@ static BOOL groupHasTrailingSep(NSString *ident) {
     dispatch_async(dispatch_get_main_queue(), ^{
         [self->_vSplitView   setPosition:MAX(NSWidth(self->_vSplitView.frame),   9999) ofDividerAtIndex:0];
         [self->_hSplitView   setPosition:MAX(NSHeight(self->_hSplitView.frame),  9999) ofDividerAtIndex:0];
-        [self->_editorSplitView setPosition:MAX(NSWidth(self->_editorSplitView.frame), 9999) ofDividerAtIndex:0];
+        BOOL dockLeft = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefDockPanelsOnLeft];
+        [self->_editorSplitView setPosition:(dockLeft ? 0 : MAX(NSWidth(self->_editorSplitView.frame), 9999)) ofDividerAtIndex:0];
         // Collapse search results panel initially
         [self->_searchSplitView setPosition:NSHeight(self->_searchSplitView.frame) ofDividerAtIndex:0];
         [self _refreshToolbarStates];
+        self->_isWindowReadyForResizeEvents = YES;
     });
 
     // Session restore is handled by AppDelegate (which checks CLI flags like -nosession).
@@ -4230,9 +4280,64 @@ static BOOL groupHasTrailingSep(NSString *ident) {
 
 #pragma mark - Session
 
+- (NSArray<TabManager *> *)sessionTabManagers {
+    NSMutableArray<TabManager *> *mgrs = [NSMutableArray array];
+    if (_tabManager)     [mgrs addObject:_tabManager];
+    if (_subTabManagerH) [mgrs addObject:_subTabManagerH];
+    if (_subTabManagerV) [mgrs addObject:_subTabManagerV];
+    return mgrs;
+}
+
+/// The controllers whose tabs belong in the session: every window that is still
+/// live, plus the receiver. The receiver is included even while closing because
+/// the usual caller is the last window closing as the app goes away, which is
+/// exactly the case that has always persisted. A window closed while others stay
+/// open marks itself closed first (-windowShouldClose:), so it is left out like
+/// windows the user closed earlier; those documents are gone.
+- (NSArray<MainWindowController *> *)_sessionContributingControllers {
+    NSMutableArray<MainWindowController *> *result = [NSMutableArray array];
+    if (!_windowHasClosed) [result addObject:self];
+    id appDel = NSApp.delegate;
+    if (![appDel isKindOfClass:[AppDelegate class]]) return result;  // unit hosts
+
+    for (MainWindowController *mwc in [(AppDelegate *)appDel windowControllers])
+        if (mwc != self && !mwc.windowHasClosed) [result addObject:mwc];
+    return result;
+}
+
+- (void)saveSessionForAllWindows {
+    [self _saveSessionForAllWindows];
+}
+
+/// -saveSessionForAllWindows, returning NO only when session.plist could not be
+/// written (the periodic writer retries on the next tick).
+- (BOOL)_saveSessionForAllWindows {
+    NSMutableArray<TabManager *> *mgrs = [NSMutableArray array];
+    for (MainWindowController *mwc in [self _sessionContributingControllers])
+        for (TabManager *mgr in [mwc sessionTabManagers])
+            if (![mgrs containsObject:mgr]) [mgrs addObject:mgr];
+
+    // Prefer the front window's active tab for selectedIndex — the save is often
+    // driven by the primary controller even when a secondary window has focus.
+    MainWindowController *key = nil;
+    for (MainWindowController *mwc in [self _sessionContributingControllers])
+        if (mwc.window.isKeyWindow) { key = mwc; break; }
+
+    return [self saveSessionWithTabManagers:mgrs
+                              activeEditor:[(key ?: self) currentEditor]];
+}
+
 /// Save session to ~/Library/Application Support/Nextpad++/session.plist.
 /// Untitled modified tabs are written to ~/Library/Application Support/Nextpad++/backup/ automatically.
-- (void)saveSession {
+///
+/// `sessionManagers` must cover every tab whose backup should survive the
+/// stale-backup prune at the end — the prune deletes any backup file not claimed
+/// by one of these managers' editors. Callers therefore go through
+/// -saveSessionForAllWindows rather than passing one window's managers.
+/// `activeEditor` is the tab to reopen selected; ignored if it produced no entry.
+/// Returns NO only when session.plist itself could not be written.
+- (BOOL)saveSessionWithTabManagers:(NSArray<TabManager *> *)sessionManagers
+                      activeEditor:(nullable EditorView *)activeEditor {
     ensureNppDirs();
     NSString *backupDir = nppBackupDir();
 
@@ -4244,13 +4349,22 @@ static BOOL groupHasTrailingSep(NSString *ident) {
     // Clean up stale backups after saving.
     NSMutableSet *activeBackups = [NSMutableSet set];
 
+    // Set when session.plist itself could not be written. The backups just made
+    // are then unreferenced by any manifest, so the prune at the end is skipped
+    // rather than allowed to delete them as strays. Per-editor backup failures do
+    // NOT set this — -_claimBackupFor:inDirectory: already claims whatever that
+    // buffer still has on disk, so the prune stays safe and keeps collecting
+    // genuine garbage.
+    BOOL manifestWriteFailed = NO;
+
     // Issue #162: enumerate editors across ALL views (primary + both split
     // views), not just the primary. A tab moved via "Move to Other …View" lives
     // in a different TabManager; iterating only _tabManager omitted it from the
     // session AND (because its backup wasn't added to activeBackups) deleted its
     // backup in the prune below — silent loss of unsaved content. Restored tabs
     // all reopen in the primary view (split layout is intentionally not kept).
-    NSArray<TabManager *> *sessionManagers = @[_tabManager, _subTabManagerH, _subTabManagerV];
+    // The same reasoning extends across windows, which is why the manager list
+    // is supplied by the caller (see -saveSessionForAllWindows).
     NSMutableArray<EditorView *> *sessionEditors = [NSMutableArray array];
     NSMapTable<EditorView *, TabManager *> *ownerManager =
         [NSMapTable strongToStrongObjectsMapTable];
@@ -4264,6 +4378,10 @@ static BOOL groupHasTrailingSep(NSString *ident) {
     }
 
     NSMutableArray *tabs = [NSMutableArray array];
+    // Parallel to `tabs`: which editor produced each entry. `tabs` skips
+    // untouched untitled tabs, so a tab-bar index is not an index into it —
+    // selectedIndex has to be resolved against this list.
+    NSMutableArray<EditorView *> *tabEditors = [NSMutableArray array];
     for (EditorView *ed in sessionEditors) {
         NSMutableDictionary *info = [NSMutableDictionary dictionary];
 
@@ -4273,17 +4391,19 @@ static BOOL groupHasTrailingSep(NSString *ident) {
             // Untitled tab — restore if it has content OR was renamed (#177), so a
             // renamed organizational tab survives relaunch even when empty.
             if (!ed.isModified && !ed.customTabName.length) continue;
-            NSString *backup = [ed saveBackupToDirectory:backupDir];
+            NSString *backup = [self _sessionBackupFor:ed inDirectory:backupDir];
             if (backup) { info[@"backupFilePath"] = backup; [activeBackups addObject:backup]; }
             info[@"untitledIndex"] = @(ed.untitledIndex);
             if (ed.customTabName.length) info[@"customTabName"] = ed.customTabName;
+            if (ed.recoveredFromName.length) info[@"recoveredFromName"] = ed.recoveredFromName;
         } else if (ed.isModified && !ed.largeFileMode) {
             // Named file with unsaved changes — back up content
-            NSString *backup = [ed saveBackupToDirectory:backupDir];
+            NSString *backup = [self _sessionBackupFor:ed inDirectory:backupDir];
             if (backup) { info[@"backupFilePath"] = backup; [activeBackups addObject:backup]; }
         }
 
         if (ed.currentLanguage.length) info[@"language"] = ed.currentLanguage;
+        if (ed.currentLanguageIsUDL) info[@"languageIsUDL"] = @YES;
 
         // ── Cursor, selection, scroll state (matches Windows NPP session format) ──
         ScintillaView *sci = ed.scintillaView;
@@ -4319,7 +4439,7 @@ static BOOL groupHasTrailingSep(NSString *ident) {
         {
             NSMutableArray *marks = [NSMutableArray array];
             sptr_t line = 0;
-            while ((line = [sci message:SCI_MARKERNEXT wParam:(uptr_t)line lParam:(1 << 20)]) >= 0) {
+            while ((line = [sci message:SCI_MARKERNEXT wParam:(uptr_t)line lParam:(1 << kBookmarkMarker)]) >= 0) {
                 [marks addObject:@(line)];
                 line++; // advance past this line
             }
@@ -4341,6 +4461,7 @@ static BOOL groupHasTrailingSep(NSString *ident) {
         }
 
         [tabs addObject:info];
+        [tabEditors addObject:ed];
     }
 
     // Issue #87 (refined) — empty-session preserve guard.
@@ -4354,22 +4475,108 @@ static BOOL groupHasTrailingSep(NSString *ident) {
     //   ──────────────────────┼──────────────────────────
     //   YES (restored at boot)| write empty session  → user's close persists
     //   NO  (didn't restore)  | preserve prior plist → original Issue #87 fix
-    if (tabs.count == 0 && !_didRestoreSession) return;
+    // The periodic writer (-_syncSessionManifest) means session.plist may
+    // already describe this run's tabs even without a restore. Once it does,
+    // the prior plist is gone and preserving the current one would bring back
+    // files the user has since closed, so the empty set is written as well.
+    if (tabs.count == 0 && !_didRestoreSession && !sWroteSessionTabsThisRun) return YES;
 
+    // Resolve the active tab against `tabs`, not against a tab-bar index: with
+    // several windows (or a split view) the tab bars each start at 0, so a raw
+    // tab-bar index restores an unrelated document.
+    NSUInteger selIdx = activeEditor ? [tabEditors indexOfObject:activeEditor] : NSNotFound;
     NSDictionary *session = @{
         @"tabs":          tabs,
-        @"selectedIndex": @(_tabManager.tabBar.selectedIndex)
+        @"selectedIndex": @(selIdx == NSNotFound ? 0 : (NSInteger)selIdx)
     };
-    [session writeToFile:nppSessionPath() atomically:YES];
+    // A manifest that did not land leaves any backup written under a NEW name
+    // unreferenced: restoreLastSession: reads only this file, so nothing claims
+    // those on the next launch and the following successful save would prune them
+    // as strays. Keeping them costs disk; deleting them costs the user's text.
+    if (![session writeToFile:nppSessionPath() atomically:YES]) {
+        NSLog(@"[Nextpad++] could not write %@ — skipping the backup prune so this "
+              @"session's backups survive for manual recovery", nppSessionPath());
+        manifestWriteFailed = YES;
+    } else if (tabs.count > 0) {
+        sWroteSessionTabsThisRun = YES;
+    }
 
-    // Prune stale backup files no longer referenced by any open editor
+    // Prune stale backup files no longer referenced by any open editor.
+    if (manifestWriteFailed) return NO;
+
+    // Only files this process knows about are candidates. A backup that is in
+    // the directory but was neither restored, recovered nor written by this
+    // process has never been shown to the user: typically a tab created after
+    // the previous quit whose run then crashed before any manifest named it.
+    // Deleting it here was how such work got lost for good; leaving it lets the
+    // next session restore recover it as an orphan.
+    NSMutableSet<NSString *> *activeCanonical = [NSMutableSet set];
+    for (NSString *path in activeBackups) {
+        nppNoteKnownBackup(path);
+        [activeCanonical addObject:nppCanonicalPath(path)];
+    }
+
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *backupFiles = [fm contentsOfDirectoryAtPath:backupDir error:nil];
     for (NSString *name in backupFiles) {
-        NSString *full = [backupDir stringByAppendingPathComponent:name];
-        if (![activeBackups containsObject:full])
-            [fm removeItemAtPath:full error:nil];
+        NSString *full = nppCanonicalPath([backupDir stringByAppendingPathComponent:name]);
+        if (![activeCanonical containsObject:full] && nppIsKnownBackup(full)
+            && [fm removeItemAtPath:full error:nil])
+            [nppKnownBackups() removeObject:full];
     }
+    return YES;
+}
+
+/// The backup the session should reference for `ed`. The periodic manifest
+/// write (-_syncSessionManifest) follows the autosave tick that just wrote every
+/// modified buffer of the saver's window, and each other window's tick keeps its
+/// own buffers fresh, so it claims an existing backup file as is rather than
+/// writing every buffer a second time. Quit and window close always write.
+- (nullable NSString *)_sessionBackupFor:(EditorView *)ed inDirectory:(NSString *)dir {
+    NSString *existing = ed.backupFilePath;
+    if (_sessionSaveReusesBackups && existing.length
+        && [[NSFileManager defaultManager] fileExistsAtPath:existing])
+        return existing;
+    return [self _claimBackupFor:ed inDirectory:dir];
+}
+
+/// Write a backup for `ed` and return the path the session should claim.
+///
+/// The prune at the end of a session save deletes every backup no editor claims,
+/// so a buffer whose write failed used to have its previous, still-valid backup
+/// deleted along with its session entry. Two steps avoid that, in order of how
+/// much they save:
+///
+///   1. Retry under a fresh name. A write can fail for reasons local to one
+///      pathname — a directory sitting where the file should be, permissions on
+///      that one file — and a retry then captures the CURRENT text, which is the
+///      only outcome that loses nothing. `saveBackupToDirectory:` picks a new
+///      timestamped, uniquified name whenever backupFilePath is nil.
+///   2. Failing that (full disk, unwritable backup directory), claim the last
+///      backup that did land. It is older than what is on screen — possibly much
+///      older — but claiming it keeps it out of the prune and records it in the
+///      session, so the next launch restores that snapshot instead of nothing.
+- (nullable NSString *)_claimBackupFor:(EditorView *)ed inDirectory:(NSString *)dir {
+    NSString *fresh = [ed saveBackupToDirectory:dir];
+    if (fresh) return fresh;
+
+    NSString *previous = ed.backupFilePath;
+    if (previous.length) {
+        ed.backupFilePath = nil;                    // forces a new name below
+        NSString *retry = [ed saveBackupToDirectory:dir];
+        if (retry) return retry;                    // current text captured
+        ed.backupFilePath = previous;               // keep naming the good file
+    }
+
+    if (previous.length && [[NSFileManager defaultManager] fileExistsAtPath:previous]) {
+        NSLog(@"[Nextpad++] backup write failed for \"%@\" — the session will restore "
+              @"the older snapshot at %@", ed.displayName, previous);
+        return previous;
+    }
+
+    NSLog(@"[Nextpad++] backup write failed for \"%@\" and it has no earlier backup; "
+          @"its unsaved changes are not protected", ed.displayName);
+    return nil;
 }
 
 /// Restore session from ~/Library/Application Support/Nextpad++/session.plist.
@@ -4377,7 +4584,7 @@ static BOOL groupHasTrailingSep(NSString *ident) {
 - (BOOL)restoreLastSession {
     NSDictionary *session = [NSDictionary dictionaryWithContentsOfFile:nppSessionPath()];
     NSArray<NSDictionary *> *tabs = session[@"tabs"];
-    if (!tabs.count) return NO;
+    if (![tabs isKindOfClass:[NSArray class]] || !tabs.count) return NO;
 
     NSFileManager *fm = [NSFileManager defaultManager];
     NSInteger opened = 0;
@@ -4409,11 +4616,27 @@ static BOOL groupHasTrailingSep(NSString *ident) {
             // Point filePath back to original (nil for untitled) and mark modified
             ed.filePath = filePath; // nil for untitled — custom setter handles presenter
             ed.backupFilePath = backupPath;
+            nppNoteKnownBackup(backupPath);
             NSString *customName = info[@"customTabName"];   // #177 — restore renamed tab
             if (customName.length) ed.customTabName = customName;
+            NSString *recoveredFrom = info[@"recoveredFromName"];
+            if ([recoveredFrom isKindOfClass:[NSString class]] && recoveredFrom.length)
+                ed.recoveredFromName = recoveredFrom;
             [ed markAsModified];
         }
-        if (lang.length) [ed setLanguage:lang];
+        if (lang.length) {
+            // languageIsUDL tells a UDL from a built-in of the same name;
+            // older sessions lack it and keep the name-based resolution.
+            [ed setLanguage:lang preferUDL:[info[@"languageIsUDL"] boolValue]];
+            // A saved light/dark UDL variant follows the current editor
+            // theme, as on a theme change (only for a UDL claiming the file).
+            if (ed.currentLanguageIsUDL) {
+                UserDefineLangManager *udlMgr = [UserDefineLangManager shared];
+                UserDefinedLang *udl = [udlMgr languageNamed:lang];
+                UserDefinedLang *variant = udl ? [udlMgr variantOf:udl forFileName:ed.filePath.lastPathComponent] : nil;
+                if (variant && variant != udl) [ed setLanguage:variant.name preferUDL:YES];
+            }
+        }
         [_tabManager refreshCurrentTabTitle];
 
         ScintillaView *sci = ed.scintillaView;
@@ -4439,7 +4662,7 @@ static BOOL groupHasTrailingSep(NSString *ident) {
         // ── Restore bookmarks ──
         NSArray *bookmarks = info[@"bookmarks"];
         for (NSNumber *bkLine in bookmarks)
-            [sci message:SCI_MARKERADD wParam:(uptr_t)bkLine.longLongValue lParam:20]; // kBookmarkMarker=20
+            [sci message:SCI_MARKERADD wParam:(uptr_t)bkLine.longLongValue lParam:kBookmarkMarker];
 
         // ── Restore fold state (BEFORE caret so a saved caret on a header
         // line lands consistently with the display, and any later
@@ -4501,13 +4724,95 @@ static BOOL groupHasTrailingSep(NSString *ident) {
     if (sel < (NSInteger)_tabManager.allEditors.count)
         [_tabManager selectTabAtIndex:sel];
 
-    // Mark this launch as session-restored. saveSession uses this to allow
+    // Mark this launch as session-restored. The session save uses this to allow
     // writing an empty session.plist if the user explicitly closed all the
     // restored tabs before quitting (otherwise the empty-guard would keep
     // the stale session.plist around and the same tabs would reappear next
     // launch).
     _didRestoreSession = YES;
     return YES;
+}
+
+- (BOOL)recoverBackupsFromUncleanExitSince:(NSDate *)since {
+    return [self _recoverOrphanedBackupsModifiedSince:since] > 0;
+}
+
+/// Open each backup file in backup/ written at or after `since` that this
+/// process has not already reopened, as a modified untitled tab called
+/// "<original name> (recovered)", and claim it, so the user sees the text and
+/// normal session pruning applies from then on.
+///
+/// What session.plist merely names does not count as reopened. A launch with
+/// file arguments skips the session restore, and its first session write
+/// replaces the old manifest; a backup only that manifest named would then be
+/// referenced by nothing and, the crash marker cleared by the next clean quit,
+/// never recovered.
+///
+/// Such orphans are unsaved work no manifest points at: a tab opened after the
+/// last session.plist write in a run that then crashed, or any tab of a crashed
+/// run with session restore off. Backups the user discarded are not among
+/// them: closing a tab, reloading a file and saving all delete the backup.
+///
+/// Only runs after an unclean exit, limited to what that run wrote (`since` is
+/// when it started). Older unseen backups (from clean quits with the session
+/// off, or "Don't Save" in builds that left the file behind) are neither
+/// recovered nor pruned: they stay on disk, since nothing tells discarded text
+/// from lost text.
+///
+/// Each recovered file's modification date is reset to now, so it still
+/// qualifies if this run crashes too before its first autosave tick.
+///
+/// Returns the number of tabs opened.
+- (NSInteger)_recoverOrphanedBackupsModifiedSince:(NSDate *)since {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *backupDir = nppBackupDir();
+    NSArray<NSString *> *names = [[fm contentsOfDirectoryAtPath:backupDir error:nil]
+                                  sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+    NSString *format = [[NppLocalizer shared] translate:@"%@ (recovered)"];
+    NSString *marker = [format stringByReplacingOccurrencesOfString:@"%@" withString:@""];
+    NSInteger recovered = 0;
+
+    for (NSString *name in names) {
+        if ([name hasPrefix:@"."]) continue;                   // .DS_Store and friends
+        NSString *full = [backupDir stringByAppendingPathComponent:name];
+        if (nppIsKnownBackup(full)) continue;          // restored or written by this run
+
+        NSDictionary *attrs = [fm attributesOfItemAtPath:full error:nil];
+        if (![attrs.fileType isEqualToString:NSFileTypeRegular]) continue;
+        if ([attrs.fileModificationDate compare:since] == NSOrderedAscending) continue;
+        if (attrs.fileSize == 0) {                             // no text to lose
+            nppNoteKnownBackup(full);
+            continue;
+        }
+
+        EditorView *ed = [_tabManager addNewTab];
+        NSError *err;
+        if (![ed loadFileAtPath:full error:&err]) {
+            NSLog(@"[Nextpad++] could not recover backup %@: %@", full, err);
+            [_tabManager closeEditor:ed];
+            continue;
+        }
+        // Backup names are "<tab name>@<yyyy-MM-dd_HHmmss>[-N]" (see
+        // -[EditorView saveBackupToDirectory:]); the tab name may contain '@'.
+        NSRange at = [name rangeOfString:@"@" options:NSBackwardsSearch];
+        NSString *original = at.location != NSNotFound && at.location > 0
+                           ? [name substringToIndex:at.location] : name;
+        // A tab recovered before and lost again keeps a single marker.
+        if (marker.length)
+            original = [original stringByReplacingOccurrencesOfString:marker withString:@""];
+        if (!original.length) original = name;
+        ed.filePath = nil;                       // the original path is not recorded
+        ed.backupFilePath = full;                // keep backing up into the same file
+        ed.customTabName = [NSString stringWithFormat:format, original];
+        ed.recoveredFromName = original;         // what Save As suggests
+        [ed markAsModified];
+        nppNoteKnownBackup(full);
+        [fm setAttributes:@{ NSFileModificationDate: [NSDate date] } ofItemAtPath:full error:nil];
+        [_tabManager refreshCurrentTabTitle];
+        NSLog(@"[Nextpad++] recovered unsaved backup %@", full);
+        recovered++;
+    }
+    return recovered;
 }
 
 #pragma mark - Session Load/Save (user-triggered)
@@ -4648,6 +4953,7 @@ static void removeMacroFromShortcutsXML(NSString *name) {
         NSMutableDictionary *info = [NSMutableDictionary dictionary];
         info[@"filePath"] = ed.filePath;
         if (ed.currentLanguage.length) info[@"language"] = ed.currentLanguage;
+        if (ed.currentLanguageIsUDL) info[@"languageIsUDL"] = @YES;
         info[@"cursorLine"] = @(ed.cursorLine);
         [tabs addObject:info];
     }
@@ -4685,7 +4991,73 @@ static void removeMacroFromShortcutsXML(NSString *name) {
     NSArray *managers = @[_tabManager, _subTabManagerH, _subTabManagerV];
     for (TabManager *mgr in managers)
         for (EditorView *ed in mgr.allEditors)
-            if (ed.isModified && !ed.largeFileMode) [ed saveBackupToDirectory:backupDir];
+            if (ed.isModified && !ed.largeFileMode)
+                nppNoteKnownBackup([ed saveBackupToDirectory:backupDir]);
+    [self _syncSessionManifest];
+}
+
+/// Keep session.plist current between quits, so a crash loses at most one tick.
+///
+/// session.plist used to be written only on quit and window close. A tab opened
+/// after that got a backup from the tick above, but no manifest named it: after
+/// a crash the relaunch restored only the older tabs, and the next save pruned
+/// the new tab's backup as a stray.
+///
+/// The write happens only when something recovery depends on changed (see
+/// -_sessionManifestFingerprint), from one window for the whole app, under the
+/// same gating as the quit-time save: the Remember-session pref, -nosession and
+/// the #87 empty-session guard all apply because this goes through the same
+/// -saveSessionWithTabManagers:activeEditor:.
+- (void)_syncSessionManifest {
+    if (![self sessionPersistenceEnabled]) return;
+    AppDelegate *appDel = (AppDelegate *)NSApp.delegate;
+    if ([appDel isKindOfClass:[AppDelegate class]]) {
+        if (appDel.isTerminating) return;          // the quit path writes the session
+        // Every window runs this timer; only the controller the quit path would
+        // use writes, so windows never trade partial manifests.
+        MainWindowController *saver = nil;
+        for (MainWindowController *mwc in appDel.windowControllers)
+            if (!mwc.windowHasClosed) { saver = mwc; break; }
+        if (saver != self) return;
+    }
+
+    NSString *fingerprint = [self _sessionManifestFingerprint];
+    if ([fingerprint isEqualToString:sLastManifestFingerprint]) return;
+    _sessionSaveReusesBackups = YES;
+    BOOL written = [self _saveSessionForAllWindows];
+    _sessionSaveReusesBackups = NO;
+    if (!written) return;                            // not written: retry next tick
+    // The save itself can assign backup paths (a tab's first backup), so record
+    // the state it left behind rather than the one that triggered it.
+    sLastManifestFingerprint = [self _sessionManifestFingerprint];
+}
+
+/// The parts of every session tab that crash recovery depends on: which tabs
+/// exist, in which view and order, their file and backup paths, names, modified
+/// state, language, read-only, RTL, color and pin. Caret, scroll, folds and bookmarks are left
+/// out; they change constantly and are refreshed by the next write anyway.
+- (NSString *)_sessionManifestFingerprint {
+    NSMutableString *fp = [NSMutableString string];
+    for (MainWindowController *mwc in [self _sessionContributingControllers]) {
+        for (TabManager *mgr in [mwc sessionTabManagers]) {
+            [fp appendFormat:@"[%p", mgr];
+            NSArray<EditorView *> *eds = mgr.allEditors;
+            for (NSInteger i = 0; i < (NSInteger)eds.count; i++) {
+                EditorView *ed = eds[i];
+                ScintillaView *sci = ed.scintillaView;
+                [fp appendFormat:@"\x1e%p\x1f%@\x1f%@\x1f%@\x1f%@\x1f%d%d%d%d\x1f%ld%d",
+                    ed, ed.filePath ?: @"", ed.backupFilePath ?: @"",
+                    ed.customTabName ?: @"", ed.currentLanguage ?: @"",
+                    (int)ed.isModified, (int)ed.largeFileMode,
+                    (int)([sci message:SCI_GETREADONLY] != 0),
+                    (int)([sci message:2708] == 2),    // SCI_GETBIDIRECTIONAL == R2L, as saved
+                    (long)[mgr.tabBar tabColorAtIndex:i],
+                    (int)[mgr.tabBar isTabPinnedAtIndex:i]];
+            }
+            [fp appendString:@"]"];
+        }
+    }
+    return fp;
 }
 
 #pragma mark - Public
@@ -4802,20 +5174,23 @@ static void removeMacroFromShortcutsXML(NSString *name) {
     if (!ed.filePath) { [self saveDocumentAs:sender]; return; }
     NSError *err;
     if (![ed saveError:&err]) [[NSAlert alertWithError:err] runModal];
-    [self refreshCurrentTab];
+    [self refreshTabsForEditor:ed];
 }
 
 - (void)saveDocumentAs:(id)sender {
     EditorView *ed = [self currentEditor];
     if (!ed) return;
     NSSavePanel *panel = [NSSavePanel savePanel];
-    panel.nameFieldStringValue = ed.displayName;
+    panel.nameFieldStringValue = ed.suggestedSaveName;
     [panel beginWithCompletionHandler:^(NSModalResponse r) {
         if (r == NSModalResponseOK) {
             NSError *err;
             if (![ed saveToPath:panel.URL.path error:&err])
                 [[NSAlert alertWithError:err] runModal];
-            [self refreshCurrentTab];
+            // ed, not -currentEditor: the panel is modeless, so the active pane
+            // can change while it is open, and the tab that needs repainting is
+            // the one holding the editor this save actually wrote.
+            [self refreshTabsForEditor:ed];
         }
     }];
 }
@@ -5054,7 +5429,17 @@ static void removeMacroFromShortcutsXML(NSString *name) {
     btnCancel.action = @selector(abortModal);
     [cv addSubview:btnCancel];
 
+    // clicking the red x doesn't call stopModal/abortModal on its own — the
+    // window vanishes but the modal loop keeps running, swallowing every click.
+    // basically the app looks frozen. lets catch that close and treat it as cancel.
+    id closeObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowWillCloseNotification
+                    object:panel
+                     queue:nil
+                usingBlock:^(NSNotification *note) { [NSApp abortModal]; }];
+
     NSModalResponse resp = [NSApp runModalForWindow:panel];
+    [[NSNotificationCenter defaultCenter] removeObserver:closeObserver];
     [panel orderOut:nil];
     if (resp != NSModalResponseStop) return;
 
@@ -5378,7 +5763,16 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     // Initial check (also sets btnOK.enabled to its starting state)
     checkConflict();
 
+    // same deal as the run-macro dialog — red x needs to end the modal session
+    // or the app goes into a ghost-modal state where nothing is clickable (#283)
+    id closeObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowWillCloseNotification
+                    object:panel
+                     queue:nil
+                usingBlock:^(NSNotification *note) { [NSApp abortModal]; }];
+
     NSModalResponse resp = [NSApp runModalForWindow:panel];
+    [[NSNotificationCenter defaultCenter] removeObserver:closeObserver];
     [panel orderOut:nil];
     if (resp != NSModalResponseStop) return;
 
@@ -5472,25 +5866,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
                 hasCmd = YES; hasCtrl = NO;
             }
 
-            NSEventModifierFlags mods = 0;
-            if (hasCmd)   mods |= NSEventModifierFlagCommand;
-            if (hasCtrl)  mods |= NSEventModifierFlagControl;
-            if (hasAlt)   mods |= NSEventModifierFlagOption;
-            if (hasShift) mods |= NSEventModifierFlagShift;
-
-            NSString *key = @"";
-            if (keyCode >= 'A' && keyCode <= 'Z')
-                key = [[NSString stringWithFormat:@"%c", (char)keyCode] lowercaseString];
-            else if (keyCode >= '0' && keyCode <= '9')
-                key = [NSString stringWithFormat:@"%c", (char)keyCode];
-            else if (keyCode >= 112 && keyCode <= 123) {
-                unichar fk = NSF1FunctionKey + (keyCode - 112);
-                key = [NSString stringWithCharacters:&fk length:1];
-            } else
-                key = [[NSString stringWithFormat:@"%c", (char)keyCode] lowercaseString];
-
-            item.keyEquivalent = key;
-            item.keyEquivalentModifierMask = mods;
+            NppApplyShortcutToMenuItem(item, keyCode, hasCmd, hasCtrl, hasAlt, hasShift);
         }
 
         [macroMenu insertItem:item atIndex:insertIdx++];
@@ -5548,21 +5924,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
                 hasCmd = YES; hasCtrl = NO;
             }
 
-            NSEventModifierFlags mods = 0;
-            if (hasCmd)   mods |= NSEventModifierFlagCommand;
-            if (hasCtrl)  mods |= NSEventModifierFlagControl;
-            if (hasAlt)   mods |= NSEventModifierFlagOption;
-            if (hasShift) mods |= NSEventModifierFlagShift;
-
-            unichar kc = 0;
-            if (keyCode >= 112 && keyCode <= 123) kc = NSF1FunctionKey + (keyCode - 112);
-            else if (keyCode >= 'A' && keyCode <= 'Z') kc = keyCode + 32;
-            else if (keyCode >= '0' && keyCode <= '9') kc = keyCode;
-            else kc = keyCode;
-            if (kc) {
-                item.keyEquivalent = [NSString stringWithCharacters:&kc length:1];
-                item.keyEquivalentModifierMask = mods;
-            }
+            NppApplyShortcutToMenuItem(item, keyCode, hasCmd, hasCtrl, hasAlt, hasShift);
         }
 
         [runMenu insertItem:item atIndex:insertIdx++];
@@ -5601,9 +5963,13 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
         [_panelTitleKeys setObject:key forKey:panel];
         NSString *localized = [[NppLocalizer shared] translate:key];
         [_sidePanelHost showPanel:panel withTitle:localized];
-        if ([_editorSplitView isSubviewCollapsed:_sidePanelHost]) {
+        if ([_sidePanelHost hasVisiblePanels] && [_editorSplitView isSubviewCollapsed:_sidePanelHost]) {
             CGFloat w = NSWidth(_editorSplitView.frame);
-            [_editorSplitView setPosition:MAX(200, w - 280) ofDividerAtIndex:0];
+            BOOL dockLeft = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefDockPanelsOnLeft];
+            CGFloat targetWidth = [[NSUserDefaults standardUserDefaults] doubleForKey:kPrefSidePanelWidth];
+            if (targetWidth < 150) targetWidth = 280;
+            CGFloat position = dockLeft ? MIN(w - 200, targetWidth) : MAX(200, w - targetWidth);
+            [_editorSplitView setPosition:position ofDividerAtIndex:0];
         }
     } else {
         // Informal selector: any panel that needs to flush state (e.g.
@@ -5614,9 +5980,11 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
             [(id)panel performSelector:@selector(panelWillClose)];
         [_sidePanelHost hidePanel:panel];
         [_panelTitleKeys removeObjectForKey:panel];
-        if (!_sidePanelHost.hasVisiblePanels)
-            [_editorSplitView setPosition:NSWidth(_editorSplitView.frame)
-                         ofDividerAtIndex:0];
+        if (!_sidePanelHost.hasVisiblePanels) {
+            BOOL dockLeft = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefDockPanelsOnLeft];
+            CGFloat position = dockLeft ? 0 : NSWidth(_editorSplitView.frame);
+            [_editorSplitView setPosition:position ofDividerAtIndex:0];
+        }
     }
     [self _refreshToolbarStates];
     [self _saveOpenSidePanels];
@@ -5629,12 +5997,15 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
 - (void)_saveOpenSidePanels {
     if (!_panelTitleKeys) return;
     NSDictionary *whitelist = _restorableSidePanels();
-    NSMutableArray<NSString *> *openKeys = [NSMutableArray array];
+    NSMutableArray *openPanels = [NSMutableArray array];
     for (NSView *panel in [[_panelTitleKeys keyEnumerator] allObjects]) {
         NSString *key = [_panelTitleKeys objectForKey:panel];
-        if (key && whitelist[key]) [openKeys addObject:key];
+        if (key && whitelist[key]) {
+            BOOL popped = [_sidePanelHost isPanelPopped:panel];
+            [openPanels addObject:@{@"id": key, @"popped": @(popped)}];
+        }
     }
-    [[NSUserDefaults standardUserDefaults] setObject:openKeys forKey:kOpenSidePanelsKey];
+    [[NSUserDefaults standardUserDefaults] setObject:openPanels forKey:kOpenSidePanelsKey];
 }
 
 // Re-open the side panels that were open at last quit (issue #132).
@@ -5647,7 +6018,15 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     if (![saved isKindOfClass:[NSArray class]]) return;
 
     NSDictionary<NSString *, NSString *> *whitelist = _restorableSidePanels();
-    for (NSString *key in saved) {
+    for (id item in saved) {
+        NSString *key = nil;
+        BOOL popped = NO;
+        if ([item isKindOfClass:[NSString class]]) {
+            key = item;
+        } else if ([item isKindOfClass:[NSDictionary class]]) {
+            key = item[@"id"];
+            popped = [item[@"popped"] boolValue];
+        }
         if (![key isKindOfClass:[NSString class]]) continue;
         NSString *selName = whitelist[key];
         if (!selName) continue;                       // unknown / plugin / Git
@@ -5659,6 +6038,20 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
         #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
         [self performSelector:sel withObject:nil];
         #pragma clang diagnostic pop
+
+        if (popped) {
+            // Find the panel instance that was just opened (it will now be in _panelTitleKeys)
+            NSView *openedPanel = nil;
+            for (NSView *p in [[_panelTitleKeys keyEnumerator] allObjects]) {
+                if ([[_panelTitleKeys objectForKey:p] isEqualToString:key]) {
+                    openedPanel = p;
+                    break;
+                }
+            }
+            if (openedPanel) {
+                [_sidePanelHost popOutPanel:openedPanel];
+            }
+        }
     }
 }
 
@@ -5719,12 +6112,16 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
 // (everything is popped), re-expand when a dock-back brings a panel into
 // an otherwise-empty pane.
 - (void)sidePanelHostDidChangePanelLayout:(SidePanelHost *)host {
+    BOOL dockLeft = [[NSUserDefaults standardUserDefaults] boolForKey:kPrefDockPanelsOnLeft];
     if (!host.hasVisiblePanels) {
-        [_editorSplitView setPosition:NSWidth(_editorSplitView.frame)
-                     ofDividerAtIndex:0];
+        CGFloat position = dockLeft ? 0 : NSWidth(_editorSplitView.frame);
+        [_editorSplitView setPosition:position ofDividerAtIndex:0];
     } else if ([_editorSplitView isSubviewCollapsed:_sidePanelHost]) {
         CGFloat w = NSWidth(_editorSplitView.frame);
-        [_editorSplitView setPosition:MAX(200, w - 280) ofDividerAtIndex:0];
+        CGFloat targetWidth = [[NSUserDefaults standardUserDefaults] doubleForKey:kPrefSidePanelWidth];
+        if (targetWidth < 150) targetWidth = 280;
+        CGFloat position = dockLeft ? MIN(w - 200, targetWidth) : MAX(200, w - targetWidth);
+        [_editorSplitView setPosition:position ofDividerAtIndex:0];
     }
     [self _refreshToolbarStates];
 }
@@ -6239,7 +6636,15 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     tv.doubleAction = @selector(activatePressed:);
     tv.target = helper;
 
+    // without this the close button (red x) leaves us stuck in modal limbo
+    id closeObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowWillCloseNotification
+                    object:panel
+                     queue:nil
+                usingBlock:^(NSNotification *note) { [NSApp stopModal]; }];
+
     [NSApp runModalForWindow:panel];
+    [[NSNotificationCenter defaultCenter] removeObserver:closeObserver];
 }
 
 #pragma mark - UI Validation
@@ -6481,16 +6886,18 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     // and top-level XML/YAML/KIXtart items walking up to the menu bar).
     if (action == @selector(setLanguageFromMenu:)) {
         NSString *langCode = [(NSMenuItem *)item representedObject];
+        // Built-in items (including "None (Normal Text)", whose code is
+        // the empty string) are never checked while a UDL is active.
         NSString *current  = ed.currentLanguage ?: @"";
-        [mi setState:[current isEqualToString:langCode]
-            ? NSControlStateValueOn : NSControlStateValueOff];
+        BOOL on = !ed.currentLanguageIsUDL && [current isEqualToString:langCode];
+        [mi setState:on ? NSControlStateValueOn : NSControlStateValueOff];
         return YES;
     }
     if (action == @selector(setUDLLanguageFromMenu:)) {
         NSString *udlName = [(NSMenuItem *)item representedObject];
         NSString *current = ed.currentLanguage ?: @"";
-        [mi setState:[current isEqualToString:udlName]
-            ? NSControlStateValueOn : NSControlStateValueOff];
+        BOOL on = ed.currentLanguageIsUDL && [current isEqualToString:udlName];
+        [mi setState:on ? NSControlStateValueOn : NSControlStateValueOff];
         return YES;
     }
 
@@ -6637,7 +7044,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = [[NppLocalizer shared] translate:@"Go to Line"];
     [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Go"]];
-    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
     NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0,0,160,22)];
     input.placeholderString = [NSString stringWithFormat:@"1 – %ld", (long)ed.lineCount];
     alert.accessoryView = input;
@@ -6871,7 +7278,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     alert.messageText = [[NppLocalizer shared] translate:@"Insert Date/Time"];
     alert.informativeText = [[NppLocalizer shared] translate:@"Enter an NSDateFormatter format string:"];
     [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Insert"]];
-    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
     NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 22)];
     input.stringValue = @"yyyy-MM-dd HH:mm:ss";
     alert.accessoryView = input;
@@ -7205,6 +7612,19 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
 
 #pragma mark - FindWindowDelegate
 
+- (void)_dockPanelsLeftChanged {
+    // Reorder subviews of _editorSplitView
+    [_sidePanelHost removeFromSuperview];
+    [_hSplitView removeFromSuperview];
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:kPrefDockPanelsOnLeft]) {
+        [_editorSplitView addSubview:_sidePanelHost];
+        [_editorSplitView addSubview:_hSplitView];
+    } else {
+        [_editorSplitView addSubview:_hSplitView];
+        [_editorSplitView addSubview:_sidePanelHost];
+    }
+}
+
 - (EditorView *)currentEditorForFindWindow { return [self currentEditor]; }
 
 // FindWindowDelegate
@@ -7407,6 +7827,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     NSInteger zoom = [ed.scintillaView message:SCI_GETZOOM];
     [[NSUserDefaults standardUserDefaults] setInteger:zoom forKey:kPrefZoomLevel];
     [self _propagateEditorZoom:zoom];
+    [self updateStatusBar];
 }
 
 - (void)zoomOut:(id)sender {
@@ -7418,6 +7839,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     NSInteger zoom = [ed.scintillaView message:SCI_GETZOOM];
     [[NSUserDefaults standardUserDefaults] setInteger:zoom forKey:kPrefZoomLevel];
     [self _propagateEditorZoom:zoom];
+    [self updateStatusBar];
 }
 
 - (void)resetZoom:(id)sender {
@@ -7428,6 +7850,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     [ed.scintillaView message:SCI_SETZOOM wParam:0];
     [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:kPrefZoomLevel];
     [self _propagateEditorZoom:0];
+    [self updateStatusBar];
 }
 
 - (void)toggleShowAllChars:(id)sender {
@@ -7650,7 +8073,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
             a.messageText = [[NppLocalizer shared] translate:@"Encoding Change"];
             a.informativeText = [[NppLocalizer shared] translate:@"The file has unsaved changes. Reloading with the new encoding will discard them. Continue?"];
             [a addButtonWithTitle:[[NppLocalizer shared] translate:@"Reload"]];
-            [a addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+            [a addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
             a.alertStyle = NSAlertStyleWarning;
             if ([a runModal] != NSAlertFirstButtonReturn) return;
         }
@@ -7785,14 +8208,20 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     if (!udl) return;
     EditorView *ed = [self currentEditor];
     if (!ed) return;
-    [[UserDefineLangManager shared] applyLanguage:udl toScintillaView:ed.scintillaView];
-    // Keep the editor's currentLanguage in sync with what's actually lexing
-    // the buffer. Without this, validateUserInterfaceItem: for UDL items
-    // compares against a stale language name and the UDL checkmark never
-    // appears, and the Languages-menu parent-header refresh can't see that
-    // a UDL is now active.
-    ed.currentLanguage = udlName;
+    // setLanguage: routes UDLs to applyLanguage: after SCI_STYLECLEARALL and
+    // the global style colours, so the previous lexer's colours do not show
+    // through styles whose colorStyle leaves fg/bg transparent. It also keeps
+    // currentLanguage in sync (UDL menu checkmark) and notifies plugins.
+    [ed setLanguage:udlName preferUDL:YES];
     [self updateStatusBar];
+}
+
+- (void)_userDefineLangsChanged:(NSNotification *)n {
+    [self rebuildUDLLanguageMenu];
+    // Deferred: editors observe the same notification and may run after
+    // this one, so the status bar must read their language once they have
+    // followed a rename or removal.
+    dispatch_async(dispatch_get_main_queue(), ^{ [self updateStatusBar]; });
 }
 
 /// Populate the Language menu with all loaded UDL names.
@@ -7982,6 +8411,19 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
 
 #pragma mark - NSSplitViewDelegate
 
+- (void)splitViewDidResizeSubviews:(NSNotification *)notification {
+    if (!_isWindowReadyForResizeEvents) return;
+    NSSplitView *sv = notification.object;
+    if (sv == _editorSplitView) {
+        if (![_editorSplitView isSubviewCollapsed:_sidePanelHost]) {
+            CGFloat width = NSWidth(_sidePanelHost.frame);
+            if (width >= 150) {
+                [[NSUserDefaults standardUserDefaults] setDouble:width forKey:kPrefSidePanelWidth];
+            }
+        }
+    }
+}
+
 - (BOOL)splitView:(NSSplitView *)sv canCollapseSubview:(NSView *)sub {
     if (sv == _editorSplitView) return sub == _sidePanelHost;
     if (sv == _hSplitView)      return sub == _subEditorContainerH;
@@ -8087,6 +8529,8 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     if (!_languagesMenu) return;
 
     EditorView *ed = [self currentEditor];
+    // Letter headers cover built-in languages only.
+    BOOL builtInActive = !ed.currentLanguageIsUDL;
     NSString *current = ed.currentLanguage ?: @"";
 
     for (NSMenuItem *topItem in _languagesMenu.itemArray) {
@@ -8099,7 +8543,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
             if (child.action == @selector(setLanguageFromMenu:)) {
                 isLetterSubmenu = YES;
                 NSString *code = (NSString *)child.representedObject ?: @"";
-                if (code.length && [current isEqualToString:code]) {
+                if (builtInActive && code.length && [current isEqualToString:code]) {
                     anyMatch = YES;
                     break;
                 }
@@ -8192,6 +8636,20 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     if (_docListPanel) [_docListPanel reloadData];
 }
 
+- (BOOL)tabManagerShouldExitOnLastTabClose:(id)tabManager {
+    // Only exit when ALL tab managers across this window are empty. If a split
+    // view still holds tabs, don't quit — just let the empty pane remain.
+    for (TabManager *mgr in @[_tabManager, _subTabManagerH, _subTabManagerV]) {
+        if (mgr && mgr != (TabManager *)tabManager && mgr.allEditors.count > 0)
+            return NO;
+    }
+    // Every pane is empty. Close this window; if it is the last window,
+    // -applicationShouldTerminateAfterLastWindowClosed: returns YES and the
+    // app will quit automatically.
+    [self.window performClose:nil];
+    return YES;
+}
+
 #pragma mark - Cursor notification
 
 - (void)editorCursorMoved:(NSNotification *)note {
@@ -8199,6 +8657,15 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     if (ed == [self currentEditor]) {
         [self updateStatusBar];
         [self refreshCurrentTab];
+    }
+}
+
+- (void)_editorZoomDidChange:(NSNotification *)note {
+    EditorView *ed = note.object;
+    if (ed == [self currentEditor]) {
+        NSInteger zoom = ed.zoomLevel;
+        [[NSUserDefaults standardUserDefaults] setInteger:zoom forKey:kPrefZoomLevel];
+        [self updateStatusBar];
     }
 }
 
@@ -8232,7 +8699,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
         alert.informativeText = [NSString stringWithFormat:[[NppLocalizer shared] translate:@"'%@' has unsaved changes.\nReload and discard changes?"],
                                  path.lastPathComponent];
         [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Reload"]];
-        [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+        [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
         if ([alert runModal] != NSAlertFirstButtonReturn) return;
     }
     NSError *err;
@@ -8265,7 +8732,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     panel.title = [[NppLocalizer shared] translate:@"Save a Copy As"];
     if (ed.filePath)
         panel.directoryURL = [NSURL fileURLWithPath:ed.filePath.stringByDeletingLastPathComponent];
-    panel.nameFieldStringValue = ed.displayName;
+    panel.nameFieldStringValue = ed.suggestedSaveName;
     [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
         NSError *err;
@@ -8294,7 +8761,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     tf.stringValue = path.lastPathComponent;
     alert.accessoryView = tf;
     [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Rename"]];
-    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
     alert.window.initialFirstResponder = tf;
     if ([alert runModal] != NSAlertFirstButtonReturn) return;
     NSString *newName = tf.stringValue;
@@ -8324,7 +8791,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     tf.stringValue = ed.displayName;
     alert.accessoryView = tf;
     [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Rename"]];
-    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
     alert.window.initialFirstResponder = tf;
     if ([alert runModal] != NSAlertFirstButtonReturn) return;
 
@@ -8349,13 +8816,18 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
         NSString *suffix  = @"";
         NSRange at = [oldFile rangeOfString:@"@" options:NSBackwardsSearch];
         if (at.location != NSNotFound) suffix = [oldFile substringFromIndex:at.location];
-        NSString *newBackup = [dir stringByAppendingPathComponent:
-                               [newName stringByAppendingString:suffix]];
+        // Claim the new name through the uniquifier instead of deleting whatever
+        // sits there: renaming a tab to a name another buffer already backed up
+        // in the same second would otherwise destroy that buffer's only copy of
+        // its unsaved text.
+        NSString *newBackup = [EditorView uniqueBackupPathInDirectory:dir
+                                                            filename:[newName stringByAppendingString:suffix]];
         if (![newBackup isEqualToString:oldBackup]) {
             NSFileManager *fm = [NSFileManager defaultManager];
-            [fm removeItemAtPath:newBackup error:nil];               // overwrite any stale file
-            if ([fm moveItemAtPath:oldBackup toPath:newBackup error:nil])
+            if ([fm moveItemAtPath:oldBackup toPath:newBackup error:nil]) {
                 ed.backupFilePath = newBackup;
+                nppNoteKnownBackup(newBackup);
+            }
         }
     }
 
@@ -8374,7 +8846,7 @@ static NSArray<NSDictionary *> *convertRecordedToXmlFormat(NSArray<NSDictionary 
     alert.informativeText = [NSString stringWithFormat:[[NppLocalizer shared] translate:@"Move '%@' to the Trash?"],
                              path.lastPathComponent];
     [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Move to Trash"]];
-    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
     if ([alert runModal] != NSAlertFirstButtonReturn) return;
     NSError *err;
     if ([[NSFileManager defaultManager] trashItemAtURL:[NSURL fileURLWithPath:path]
@@ -8414,11 +8886,22 @@ typedef NS_ENUM(NSInteger, NppBatchCloseDecision) {
     NppLocalizer *loc = [NppLocalizer shared];
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = [NSString stringWithFormat:[loc translate:@"Save '%@' before closing?"], ed.displayName];
+    // These titles are translated, and AppKit's automatic key equivalents match on
+    // the ENGLISH title — so in a non-English build "Don't Save" and "Cancel" had
+    // no shortcut (issue #294). The default button gets Return whatever it is
+    // called, so Save is already reachable and needs nothing here.
     [alert addButtonWithTitle:[loc translate:@"Save"]];        // NSAlertFirstButtonReturn
-    [alert addButtonWithTitle:[loc translate:@"Don't Save"]];  // NSAlertSecondButtonReturn
-    if (allowAll)
+    NSButton *dontSave = [alert addButtonWithTitle:[loc translate:@"Don't Save"]]; // NSAlertSecondButtonReturn
+    dontSave.keyEquivalent = @"d";
+    dontSave.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+    if (allowAll) {
+        // Deliberately no key equivalent. The obvious choice, ⇧⌘D, is unsafe here:
+        // this alert is usually reached by Close All (⇧⌘W), which leaves Shift
+        // under the user's finger, so reaching for ⌘D would discard every
+        // remaining modified document instead of one. Bulk discard stays click-only.
         [alert addButtonWithTitle:[loc translate:@"Don't Save All"]]; // NSAlertThirdButtonReturn
-    [alert addButtonWithTitle:[loc translate:@"Cancel"]];      // Third (or fourth) button
+    }
+    [alert addButtonWithTitle:[loc translate:@"Cancel"]].keyEquivalent = @"\033"; // Third (or fourth) button
 
     NSModalResponse r = [alert runModal];
     if (r == NSAlertFirstButtonReturn) {            // Save
@@ -8428,7 +8911,7 @@ typedef NS_ENUM(NSInteger, NppBatchCloseDecision) {
         } else {
             // Untitled — run modal save panel. Backing out leaves it modified.
             NSSavePanel *sp = [NSSavePanel savePanel];
-            sp.nameFieldStringValue = ed.displayName;
+            sp.nameFieldStringValue = ed.suggestedSaveName;
             if ([sp runModal] == NSModalResponseOK) {
                 NSError *err;
                 [ed saveToPath:sp.URL.path error:&err];
@@ -8687,7 +9170,7 @@ typedef NS_ENUM(NSInteger, NppBatchCloseDecision) {
     alert.messageText     = [[NppLocalizer shared] translate:@"Change Search Engine"];
     alert.informativeText = [[NppLocalizer shared] translate:@"Enter the search URL. Use %s as the query placeholder (or append the query at the end):"];
     [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"OK"]];
-    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+    [alert addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
     NSTextField *tf = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 380, 22)];
     tf.stringValue = current;
     alert.accessoryView = tf;
@@ -8730,15 +9213,20 @@ typedef NS_ENUM(NSInteger, NppBatchCloseDecision) {
     panel.title = [NSString stringWithFormat:@"Choose files for %@ hash", algo];
     if ([panel runModal] != NSModalResponseOK) return;
 
+    // Lines use the target document's own line ending so a CRLF/CR
+    // document doesn't end up with mixed EOLs.
+    EditorView *ed = [self currentEditor];
+    NSString *eolName = ed.eolName;
+    NSString *eol = [eolName isEqualToString:@"CRLF"] ? @"\r\n"
+                  : [eolName isEqualToString:@"CR"]   ? @"\r" : @"\n";
     NSMutableString *results = [NSMutableString string];
     for (NSURL *url in panel.URLs) {
         NSData *data = [NSData dataWithContentsOfURL:url];
-        if (!data) { [results appendFormat:@"Error reading %@\n", url.path]; continue; }
+        if (!data) { [results appendFormat:@"Error reading %@%@", url.path, eol]; continue; }
         NSString *hash = [EditorView hexHashForAlgorithm:algo data:data];
-        [results appendFormat:@"%@  %@\n", hash ?: @"(error)", url.path];
+        [results appendFormat:@"%@  %@%@", hash ?: @"(error)", url.path, eol];
     }
     if (!results.length) return;
-    EditorView *ed = [self currentEditor];
     if (ed) {
         const char *u = results.UTF8String;
         [ed.scintillaView message:SCI_APPENDTEXT wParam:(uptr_t)strlen(u) lParam:(sptr_t)u];
@@ -9245,7 +9733,15 @@ typedef NS_ENUM(NSInteger, NppBatchCloseDecision) {
     // Initial check (also sets btnOK.enabled to its starting state)
     checkConflict();
 
+    // red x = cancel, not "leave the app in purgatory"
+    id closeObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowWillCloseNotification
+                    object:panel
+                     queue:nil
+                usingBlock:^(NSNotification *note) { [NSApp abortModal]; }];
+
     NSModalResponse resp = [NSApp runModalForWindow:panel];
+    [[NSNotificationCenter defaultCenter] removeObserver:closeObserver];
     [panel orderOut:nil];
     if (resp != NSModalResponseStop || !nameField.stringValue.length) return;
 
@@ -9996,7 +10492,7 @@ static BOOL _writeCLIScript(NSString *script, NSString *path, NSError **outErr) 
              "• ~/.local/bin (no password — you may need to add it to your PATH)"];
         [prompt addButtonWithTitle:@"/usr/local/bin"];
         [prompt addButtonWithTitle:@"~/.local/bin"];
-        [prompt addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]];
+        [prompt addButtonWithTitle:[[NppLocalizer shared] translate:@"Cancel"]].keyEquivalent = @"\033";
         NSModalResponse resp = [prompt runModal];
 
         if (resp == NSAlertThirdButtonReturn) return; // Cancel
@@ -10219,9 +10715,24 @@ static BOOL _writeCLIScript(NSString *script, NSString *path, NSError **outErr) 
     // Title bar (full path vs filename only)
     [self updateTitle];
 
+    // Apply toolbar visibility preference.
+    BOOL targetVisible = [ud boolForKey:kPrefToolbarVisible];
+    if (self.window.toolbar && self.window.toolbar.visible != targetVisible) {
+        [self.window toggleToolbarShown:nil];
+    }
+
     // Toolbar toggle states (Word wrap, etc.) follow prefs — keep them
     // in sync after a Preferences-pane change.
     [self _refreshToolbarStates];
+}
+
+- (void)_toolbarVisibilityChanged:(NSNotification *)note {
+    // Sync window toolbar visibility when toggled from preferences.
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL targetVisible = [ud boolForKey:kPrefToolbarVisible];
+    if (self.window.toolbar && self.window.toolbar.visible != targetVisible) {
+        [self.window toggleToolbarShown:nil];
+    }
 }
 
 - (void)_darkModeChanged:(NSNotification *)n {
@@ -10231,16 +10742,9 @@ static BOOL _writeCLIScript(NSString *script, NSString *path, NSError **outErr) 
     if (![NppThemeManager shared].usesGlassMaterials)
         _statusBar.layer.backgroundColor = [NppThemeManager shared].statusBarBackground.CGColor;
 
-    // Auto mode: switch editor theme to match system appearance
-    if ([NppThemeManager shared].mode == NppDarkModeAuto) {
-        BOOL isDark = [NppThemeManager shared].isDark;
-        NSString *targetTheme = isDark ? @"DarkModeDefault" : @"Default (stylers.xml)";
-        NPPStyleStore *store = [NPPStyleStore sharedStore];
-        if (![store.activeThemeName isEqualToString:targetTheme]) {
-            NSArray *lexers = [store lexersForTheme:targetTheme];
-            [store commitLexers:lexers themeName:targetTheme];
-        }
-    }
+    // Editor theme: NPPStyleStore observes this notification itself (it is
+    // created at launch) and switches to the theme remembered for the new
+    // appearance.
 
     // Re-skin the toolbar (light/dark icon set + colorization).
     [self _reskinToolbarIcons];
@@ -10406,7 +10910,15 @@ static BOOL _writeCLIScript(NSString *script, NSString *path, NSError **outErr) 
     objc_setAssociatedObject(panel, "realDS", realDS, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [tv reloadData];
 
+    // the x button doesn't end the modal on its own, so we do it ourselves
+    id closeObserver = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowWillCloseNotification
+                    object:panel
+                     queue:nil
+                usingBlock:^(NSNotification *note) { [NSApp stopModal]; }];
+
     [NSApp runModalForWindow:panel];
+    [[NSNotificationCenter defaultCenter] removeObserver:closeObserver];
 }
 
 #pragma mark - Help / Debug
@@ -10683,6 +11195,10 @@ static int64_t _sysctlInt(const char *name) {
 #pragma mark - NSWindowDelegate
 
 - (void)windowWillClose:(NSNotification *)n {
+    // The session save already ran in -windowShouldClose:, while this window was
+    // still live. From here on the receiver must not contribute tabs to a later
+    // save — its documents are closed.
+    _windowHasClosed = YES;
     [_autoSaveTimer invalidate];
     _autoSaveTimer = nil;
     // The scroll-sync timer also targets self with repeats:YES; if a split with
@@ -10717,14 +11233,80 @@ static int64_t _sysctlInt(const char *name) {
     // Auto-backup of unsaved files runs separately on its own timer and is
     // intentionally NOT coupled — losing unsaved work to a crash is a separate
     // concern from reopening tabs across launches.
-    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    BOOL rememberSession = [ud boolForKey:kPrefRememberSession];
+    //
+    // On quit, AppDelegate has already written one session covering every
+    // window (see -applicationShouldTerminate:). Saving again here would be
+    // actively harmful: by the time the second window is torn down the first is
+    // gone from windowControllers, so this save would write a session missing
+    // its tabs and prune away its backups.
     AppDelegate *appDel = (AppDelegate *)NSApp.delegate;
-    BOOL cliNoSession = [appDel isKindOfClass:[AppDelegate class]] ? appDel.cliParams.noSession : NO;
-    if (rememberSession && !cliNoSession) {
-        [self saveSession];
+    BOOL terminating = [appDel isKindOfClass:[AppDelegate class]] ? appDel.isTerminating : NO;
+    if (!terminating && [self _otherWindowsRemainOpen]) {
+        // This window's documents are closing for good while the app keeps
+        // running: they leave the session and their backups are pruned. Ask
+        // first, as closing a tab does, and leave the window out of the save.
+        if (![self _resolveUnsavedTabsBeforeWindowClose]) return NO;
+        _windowHasClosed = YES;
+    }
+    if (!terminating && [self sessionPersistenceEnabled]) {
+        [self saveSessionForAllWindows];
     }
     writeConfigXML();
+    return YES;
+}
+
+/// YES when another window that has not closed would outlive the receiver.
+- (BOOL)_otherWindowsRemainOpen {
+    id appDel = NSApp.delegate;
+    if (![appDel isKindOfClass:[AppDelegate class]]) return NO;
+    for (MainWindowController *mwc in [(AppDelegate *)appDel windowControllers])
+        if (mwc != self && !mwc.windowHasClosed) return YES;
+    return NO;
+}
+
+/// Ask Save / Don't Save / Cancel for each modified document in this window
+/// (with Don't Save All when there are several), then delete the backups of
+/// everything that is closing. Returns NO, leaving every document and backup as
+/// it was, if the user cancelled or a save did not happen.
+- (BOOL)_resolveUnsavedTabsBeforeWindowClose {
+    NSMutableArray<EditorView *> *editors = [NSMutableArray array];
+    for (TabManager *mgr in [self sessionTabManagers])
+        [editors addObjectsFromArray:mgr.allEditors];
+
+    // A clone shares its document with its sibling: ask once per document, and
+    // not at all when the sibling lives on in another window.
+    NSMutableArray<EditorView *> *dirty = [NSMutableArray array];
+    for (EditorView *ed in editors) {
+        if (!ed.isModified) continue;
+        if (ed.cloneSibling && ([dirty containsObject:ed.cloneSibling]
+                                || ![editors containsObject:ed.cloneSibling])) continue;
+        [dirty addObject:ed];
+    }
+
+    BOOL discardAll = NO;
+    for (EditorView *ed in dirty) {
+        if (discardAll) break;
+        switch ([self _promptBatchSaveBeforeClose:ed allowAll:dirty.count > 1]) {
+            case NppBatchCloseCancel:        return NO;
+            case NppBatchCloseSaveAttempted: if (ed.isModified) return NO; break;
+            case NppBatchCloseDiscardAll:    discardAll = YES; break;
+            case NppBatchCloseDiscard:       break;
+        }
+    }
+
+    // Every answer is in, so the window really closes. Saved documents have no
+    // backup any more; delete the rest so discarded text is not recovered later.
+    for (EditorView *ed in editors)
+        if (!ed.cloneSibling || [editors containsObject:ed.cloneSibling])
+            [ed discardBackup];
+    return YES;
+}
+
+- (BOOL)sessionPersistenceEnabled {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if (![ud boolForKey:kPrefRememberSession]) return NO;
+    AppDelegate *appDel = (AppDelegate *)NSApp.delegate;
+    if ([appDel isKindOfClass:[AppDelegate class]] && appDel.cliParams.noSession) return NO;
     return YES;
 }
 
@@ -10848,8 +11430,8 @@ static NSString *languageDisplayName(NSString *langCode) {
     EditorView *ed = [self currentEditor];
     if (!ed) { _statusLeft.stringValue = _statusRight.stringValue = @""; return; }
     sptr_t docLength = [ed.scintillaView message:SCI_GETLENGTH wParam:0 lParam:0];
-    _statusLeft.stringValue  = [NSString stringWithFormat:@"Ln %ld, Col %ld  |  Length: %ld  |  Lines: %ld",
-                                 (long)ed.cursorLine, (long)ed.cursorColumn, (long)docLength, (long)ed.lineCount];
+    _statusLeft.stringValue  = [NSString stringWithFormat:@"Ln %ld, Col %ld  |  Length: %ld  |  Lines: %ld  |  Zoom: %ld%%",
+                                 (long)ed.cursorLine, (long)ed.cursorColumn, (long)docLength, (long)ed.lineCount, (long)ed.zoomPercentage];
     NSString *lang = languageDisplayName(ed.currentLanguage);
     NSString *mode = ed.isOverwriteMode ? @"OVR" : @"INS";
     _statusRight.stringValue = [NSString stringWithFormat:@"%@  |  %@  |  %@  |  %@",
@@ -10862,7 +11444,32 @@ static NSString *languageDisplayName(NSString *langCode) {
 // ignored — and nothing about the status bar's appearance changes.
 - (void)_statusBarDoubleClicked:(NSClickGestureRecognizer *)gr {
     EditorView *ed = [self currentEditor];
-    if (!ed || !_statusRight.stringValue.length) return;
+    if (!ed) return;
+
+    const NSPoint p = [gr locationInView:_statusBar];
+    const CGFloat pad = 6.0;                          // forgiving hit area
+
+    // ── Zoom token double-click (Notepad++ parity) ──
+    // Double-clicking the "Zoom: X%" segment on the left status bar resets the
+    // editor zoom back to default 100% (SCI_SETZOOM 0), matching Notepad++ Windows.
+    if (_statusLeft.stringValue.length) {
+        NSString *leftFull = _statusLeft.stringValue;
+        NSRange zoomRange = [leftFull rangeOfString:@"Zoom:"];
+        if (zoomRange.location != NSNotFound) {
+            NSDictionary *attrs = @{ NSFontAttributeName: _statusLeft.font };
+            NSString *preZoom = [leftFull substringToIndex:zoomRange.location];
+            CGFloat preW = [preZoom sizeWithAttributes:attrs].width;
+            CGFloat zoomW = [[leftFull substringFromIndex:zoomRange.location] sizeWithAttributes:attrs].width;
+            const NSRect leftFr = _statusLeft.frame;
+            const CGFloat zoomLeft = NSMinX(leftFr) + preW;
+            if (p.x >= zoomLeft - pad && p.x <= zoomLeft + zoomW + pad) {
+                [self resetZoom:nil];
+                return;
+            }
+        }
+    }
+
+    if (!_statusRight.stringValue.length) return;
 
     // Compute the language token's x-range inside the right-aligned label by
     // measuring text widths with the field's own font. The text hugs the field's
@@ -10875,8 +11482,6 @@ static NSString *languageDisplayName(NSString *langCode) {
     const NSRect fr = _statusRight.frame;            // already in _statusBar coords
     const CGFloat textLeft = NSMaxX(fr) - wFull;
 
-    const NSPoint p = [gr locationInView:_statusBar];
-    const CGFloat pad = 6.0;                          // forgiving hit area
     if (p.x < textLeft - pad || p.x > textLeft + wLang + pad) return;
 
     // Pop up the LIVE menu-bar Language submenu (locale-stable tag) so its
@@ -10893,16 +11498,42 @@ static NSString *languageDisplayName(NSString *langCode) {
                                 inView:_statusBar];
 }
 
-- (void)refreshCurrentTab {
-    [_tabManager refreshCurrentTabTitle];
+/// Repaint every tab that shows `editor`, in whichever pane owns it.
+///
+/// Addressing the tab by editor rather than by "the current tab of the primary
+/// manager" matters in split view for two reasons. An editor moved into a pane
+/// is owned by _subTabManagerH/V, so refreshing _tabManager repainted an
+/// unrelated primary tab, if any, and left the pane's own tab stale — the
+/// tab kept reading "new N" after Save As, and kept its modified dot after
+/// Save, while -updateTitle (which goes through -currentEditor) showed the new
+/// name. A *cloned* editor additionally has a sibling in the other pane sharing
+/// its document, and -[EditorView saveToPath:] propagates filePath and modified
+/// state to that sibling, so its tab goes stale at the same moment and has to
+/// be repainted too.
+///
+/// Note cloneSibling holds a single peer, so a buffer cloned into both panes is
+/// only partly reached here. That is the existing clone model, not a limit of
+/// this method.
+- (void)refreshTabsForEditor:(EditorView *)editor {
+    if (!editor) return;
+    EditorView *sibling = editor.cloneSibling;
+    for (TabManager *mgr in @[_tabManager, _subTabManagerH, _subTabManagerV]) {
+        [mgr refreshTitleForEditor:editor];
+        if (sibling) [mgr refreshTitleForEditor:sibling];
+    }
     [self updateTitle];
     if (_docListPanel && [_sidePanelHost hasPanel:_docListPanel])
         [_docListPanel refreshModifiedStates];
 }
 
+- (void)refreshCurrentTab {
+    [self refreshTabsForEditor:[self currentEditor]];
+}
+
 - (void)saveWindowFrame {
     [[NSUserDefaults standardUserDefaults]
         setObject:NSStringFromRect(self.window.frame) forKey:kWindowFrameKey];
+    [[NSUserDefaults standardUserDefaults] setBool:self.window.toolbar.visible forKey:kPrefToolbarVisible];
 }
 
 - (void)restoreWindowFrame {
